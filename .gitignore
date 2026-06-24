@@ -1,0 +1,18 @@
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+
+# Build output (rebuilt by `npm run prepare` on install)
+dist/
+
+# Android
+android/build/
+android/.gradle/
+android/.cxx/
+android/local.properties
+*.iml
+.idea/
+
+# Archives
+*.zip
