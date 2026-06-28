@@ -37,6 +37,14 @@ const FileUploader: FileUploaderPlugin = {
     ensureAndroid();
     return FileUploaderNative.resolveNativePath(options);
   },
+  checkPermissions() {
+    ensureAndroid();
+    return FileUploaderNative.checkPermissions();
+  },
+  requestPermissions() {
+    ensureAndroid();
+    return FileUploaderNative.requestPermissions();
+  },
   addListener(eventName, listenerFunc) {
     ensureAndroid();
     return FileUploaderNative.addListener(eventName, listenerFunc);

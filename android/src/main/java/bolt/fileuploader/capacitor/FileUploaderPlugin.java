@@ -1,5 +1,6 @@
 package bolt.fileuploader.capacitor;
 
+import android.Manifest;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.database.Cursor;
@@ -19,10 +20,13 @@ import com.androidnetworking.interfaces.DownloadListener;
 import com.androidnetworking.interfaces.DownloadProgressListener;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -41,13 +45,41 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 
-@CapacitorPlugin(name = "FileUpload")
+@CapacitorPlugin(
+    name = "FileUpload",
+    permissions = {
+        @Permission(
+            alias = "storage",
+            strings = {
+                Manifest.permission.READ_EXTERNAL_STORAGE,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            }
+        )
+    }
+)
 public class FileUploaderPlugin extends Plugin {
 
     private final OkHttpClient client = new OkHttpClient();
 
     @PluginMethod
     public void uploadFiles(PluginCall call) {
+        if (getPermissionState("storage") != PermissionState.GRANTED) {
+            requestPermissionForAlias("storage", call, "uploadFilesPermissionCallback");
+        } else {
+            startUploadFiles(call);
+        }
+    }
+
+    @PermissionCallback
+    private void uploadFilesPermissionCallback(PluginCall call) {
+        if (getPermissionState("storage") == PermissionState.GRANTED) {
+            startUploadFiles(call);
+        } else {
+            call.reject("Storage permission is required to upload files");
+        }
+    }
+
+    private void startUploadFiles(PluginCall call) {
         String url = call.getString("url");
         String token = call.getString("token", "");
         JSObject data = call.getObject("data", new JSObject());
@@ -116,6 +148,23 @@ public class FileUploaderPlugin extends Plugin {
 
     @PluginMethod
     public void uploadFile(PluginCall call) {
+        if (getPermissionState("storage") != PermissionState.GRANTED) {
+            requestPermissionForAlias("storage", call, "uploadFilePermissionCallback");
+        } else {
+            startUploadFile(call);
+        }
+    }
+
+    @PermissionCallback
+    private void uploadFilePermissionCallback(PluginCall call) {
+        if (getPermissionState("storage") == PermissionState.GRANTED) {
+            startUploadFile(call);
+        } else {
+            call.reject("Storage permission is required to upload file");
+        }
+    }
+
+    private void startUploadFile(PluginCall call) {
         String url = call.getString("url");
         String token = call.getString("token", "");
         JSObject data = call.getObject("data", null);
@@ -174,6 +223,23 @@ public class FileUploaderPlugin extends Plugin {
 
     @PluginMethod
     public void downloadFile(PluginCall call) {
+        if (getPermissionState("storage") != PermissionState.GRANTED) {
+            requestPermissionForAlias("storage", call, "downloadPermissionCallback");
+        } else {
+            startDownloadFile(call);
+        }
+    }
+
+    @PermissionCallback
+    private void downloadPermissionCallback(PluginCall call) {
+        if (getPermissionState("storage") == PermissionState.GRANTED) {
+            startDownloadFile(call);
+        } else {
+            call.reject("Storage permission is required to download files");
+        }
+    }
+
+    private void startDownloadFile(PluginCall call) {
         String path = call.getString("path");
         String fileName = call.getString("name");
 
@@ -270,18 +336,20 @@ public class FileUploaderPlugin extends Plugin {
         String filePathValue = filePath.trim();
         String fileTypeValue = isBlank(fileType) ? "application/pdf" : fileType.trim();
 
-        File inputFile = new File(filePathValue.replace("file://", ""));
-        String storage =
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).toString() +
-                "/" + inputFile.getName();
-        File downloadFile = new File(storage);
+        File downloadFile = new File(filePathValue.replace("file://", ""));
+        if (!downloadFile.exists()) {
+            String storage =
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).toString() +
+                    "/" + downloadFile.getName();
+            downloadFile = new File(storage);
+        }
 
         if (!downloadFile.exists()) {
             JSObject result = new JSObject();
             result.put("status", false);
             result.put("error", true);
-            result.put("message", "File not found in Downloads");
-            result.put("path", storage);
+            result.put("message", "File not found");
+            result.put("path", downloadFile.getAbsolutePath());
             call.resolve(result);
             return;
         }

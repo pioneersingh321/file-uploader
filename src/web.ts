@@ -10,6 +10,7 @@ import type {
   UploadFileOptions,
   UploadFilesOptions,
   UploadResult,
+  PermissionStatus,
 } from './definitions';
 
 export class FileUploaderWeb extends WebPlugin implements FileUploaderPlugin {
@@ -34,6 +35,14 @@ export class FileUploaderWeb extends WebPlugin implements FileUploaderPlugin {
   }
 
   async resolveNativePath(_options: ResolveNativePathOptions): Promise<ResolveNativePathResult> {
+    this.notImplemented();
+  }
+
+  async checkPermissions(): Promise<PermissionStatus> {
+    this.notImplemented();
+  }
+
+  async requestPermissions(): Promise<PermissionStatus> {
     this.notImplemented();
   }
 }

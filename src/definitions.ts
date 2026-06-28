@@ -1,4 +1,8 @@
-import type { PluginListenerHandle } from '@capacitor/core';
+import type { PluginListenerHandle, PermissionState } from '@capacitor/core';
+
+export interface PermissionStatus {
+  storage: PermissionState;
+}
 
 export interface UploadFileItem {
   path: string;
@@ -76,6 +80,8 @@ export interface FileUploaderPlugin {
   downloadFile(options: DownloadFileOptions): Promise<DownloadResult>;
   openFile(options: OpenFileOptions): Promise<OpenResult>;
   resolveNativePath(options: ResolveNativePathOptions): Promise<ResolveNativePathResult>;
+  checkPermissions(): Promise<PermissionStatus>;
+  requestPermissions(): Promise<PermissionStatus>;
 
   addListener(
     eventName: 'downloadStatus',
