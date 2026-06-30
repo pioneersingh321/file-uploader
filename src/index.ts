@@ -7,50 +7,51 @@ const FileUploaderNative = registerPlugin<FileUploaderPlugin>('FileUpload', {
 
 const throwNotImplemented = () => {
   const platform = Capacitor.getPlatform();
-  throw new Error(`FileUpload is not implemented on "${platform}". Android only plugin.`);
+  throw new Error(`FileUpload is not implemented on "${platform}".`);
 };
 
-const ensureAndroid = () => {
-  if (Capacitor.getPlatform() !== 'android') {
+const ensureNative = () => {
+  const platform = Capacitor.getPlatform();
+  if (platform !== 'android' && platform !== 'ios') {
     throwNotImplemented();
   }
 };
 
 const FileUploader: FileUploaderPlugin = {
   uploadFiles(options) {
-    ensureAndroid();
+    ensureNative();
     return FileUploaderNative.uploadFiles(options);
   },
   uploadFile(options) {
-    ensureAndroid();
+    ensureNative();
     return FileUploaderNative.uploadFile(options);
   },
   downloadFile(options) {
-    ensureAndroid();
+    ensureNative();
     return FileUploaderNative.downloadFile(options);
   },
   openFile(options) {
-    ensureAndroid();
+    ensureNative();
     return FileUploaderNative.openFile(options);
   },
   resolveNativePath(options) {
-    ensureAndroid();
+    ensureNative();
     return FileUploaderNative.resolveNativePath(options);
   },
   checkPermissions() {
-    ensureAndroid();
+    ensureNative();
     return FileUploaderNative.checkPermissions();
   },
   requestPermissions() {
-    ensureAndroid();
+    ensureNative();
     return FileUploaderNative.requestPermissions();
   },
   addListener(eventName, listenerFunc) {
-    ensureAndroid();
+    ensureNative();
     return FileUploaderNative.addListener(eventName, listenerFunc);
   },
   removeAllListeners() {
-    ensureAndroid();
+    ensureNative();
     return FileUploaderNative.removeAllListeners();
   },
 };

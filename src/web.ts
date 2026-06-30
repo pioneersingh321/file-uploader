@@ -15,7 +15,7 @@ import type {
 
 export class FileUploaderWeb extends WebPlugin implements FileUploaderPlugin {
   private notImplemented(): never {
-    throw new Error('FileUpload is not implemented on web. Android only plugin.');
+    throw new Error('FileUpload is not implemented on web.');
   }
 
   async uploadFiles(_options: UploadFilesOptions): Promise<UploadResult> {
