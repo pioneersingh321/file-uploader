@@ -1,202 +1,356 @@
 # @bolt/file-uploader
 
-Capacitor plugin for Android file upload, download, and open operations. Supports multipart uploads with auth tokens, download progress events, and resolving `content://` URIs to native paths.
+[![npm version](https://img.shields.io/npm/v/@bolt/file-uploader.svg)](https://www.npmjs.com/package/@bolt/file-uploader)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Capacitor](https://img.shields.io/badge/Capacitor-8%2B-blue.svg)](https://capacitorjs.com/)
 
-**Platform support:** Android only (Capacitor 8+).
+![File Uploader Banner](assets/banner.png)
 
-**Repository:** https://github.com/pioneersingh321/file-uploader
+A high-performance Capacitor plugin for single & multi-file uploads, background downloads with progress events, file opening via system intents/previews, and native path resolution for Android and iOS.
+
+## Features
+
+- 📤 **Multipart Uploads**: Single file (`uploadFile`) or batch files (`uploadFiles`) with Bearer token authentication & custom form fields.
+- 📥 **File Downloads**: Real-time progress monitoring (`downloadStatus` event listener) saved directly to public Downloads (Android) or Documents (iOS).
+- 📂 **Native Path Resolution**: Resolves Android `content://` URIs and `file://` schemes into local native paths (with automatic cache fallback).
+- 👁️ **File Opening**: Open downloaded files using native system applications (`FileProvider` / `Intent` on Android, `UIDocumentInteractionController` on iOS).
+- 🔐 **Permission Management**: Storage permission request and check helpers built-in.
+- 📱 **Cross-Platform**: Support for **Android** and **iOS** (Capacitor 8+).
+
+---
 
 ## Requirements
 
-- Node.js 20+
-- A Capacitor 8 app with the Android platform added
-- `@capacitor/core` ^8.0.0
+- **Node.js**: 20+
+- **Capacitor**: `@capacitor/core` ^8.0.0
+- **Platforms**: Android (SDK 22+), iOS (14.0+)
 
-## Install from Git
+---
 
-### Option A — npm from a public GitHub repo
+## Installation
 
-From your Capacitor app directory:
+### Install via Git
 
 ```bash
 npm install git+https://github.com/pioneersingh321/file-uploader.git
-npx cap sync android
+npx cap sync
 ```
 
-Install a specific branch or tag:
+Install a specific branch or release tag:
 
 ```bash
+# Install specific branch
 npm install git+https://github.com/pioneersingh321/file-uploader.git#main
+
+# Install specific release tag
 npm install git+https://github.com/pioneersingh321/file-uploader.git#v1.0.0
 ```
 
-### Option B — npm from a private GitHub repo (SSH)
+### Install via Private SSH
 
 ```bash
 npm install git+ssh://git@github.com/pioneersingh321/file-uploader.git
-npx cap sync android
+npx cap sync
 ```
 
-### Option C — clone and link locally
-
-```bash
-git clone https://github.com/pioneersingh321/file-uploader.git
-cd your-capacitor-app
-npm install ../file-uploader
-npx cap sync android
-```
-
-### Option D — install from a local folder (no Git remote)
+### Install from Local Path
 
 ```bash
 npm install ../file-uploader
-npx cap sync android
+npx cap sync
 ```
 
-The plugin runs `npm run build` automatically during install (`prepare` script), so `dist/` does not need to be committed.
+*Note: The plugin executes `npm run build` automatically during installation (`prepare` script).*
 
-## Usage
+---
 
-Import the plugin in your app:
+## Usage Guide
+
+Import `FileUploader` into your Capacitor TypeScript project:
 
 ```ts
 import { FileUploader } from '@bolt/file-uploader';
 ```
 
-### Upload a single file
+### 1. Upload a Single File
 
 ```ts
-const result = await FileUploader.uploadFile({
-  url: 'https://api.example.com/upload',
-  token: 'your-bearer-token',       // optional; sent as Authorization: Bearer ...
-  fileKey: 'file',                  // optional; form field name (default: "file")
-  file: '/path/to/photo.jpg',       // or file:///path/to/photo.jpg
-  data: { userId: '123' },          // optional extra form fields
-});
+import { FileUploader } from '@bolt/file-uploader';
 
-console.log(result.status);         // true if HTTP 2xx
-console.log(result.httpStatus);     // e.g. 200
-console.log(result.output);         // parsed JSON response body
-```
+async function handleFileUpload() {
+  try {
+    const result = await FileUploader.uploadFile({
+      url: 'https://api.example.com/v1/upload',
+      token: 'your-bearer-token',       // Optional: Sent as `Authorization: Bearer ...`
+      fileKey: 'avatar',                // Optional: Multipart form field name (default: "file")
+      file: 'file:///storage/emulated/0/Download/photo.jpg', // File URI or native path
+      data: {
+        userId: 'user_123',             // Optional: Additional form fields
+        category: 'profile',
+      },
+    });
 
-### Upload multiple files
-
-```ts
-const result = await FileUploader.uploadFiles({
-  url: 'https://api.example.com/upload',
-  token: 'your-bearer-token',
-  fileKey: 'files[]',               // optional (default: "files[]")
-  files: [
-    { path: '/path/to/a.jpg' },
-    { path: 'file:///path/to/b.pdf' },
-  ],
-  data: { albumId: '42' },
-});
-```
-
-### Resolve a content URI to a native path
-
-Use this when a file picker returns an Android `content://` URI:
-
-```ts
-const { path } = await FileUploader.resolveNativePath({
-  path: 'content://com.android.providers.media.documents/document/...',
-});
-
-// path is a filesystem path usable with uploadFile / uploadFiles
-```
-
-If direct resolution fails, the plugin copies the file into the app cache and returns that path.
-
-### Download a file
-
-Downloads to the public **Downloads** folder and emits progress events (see below).
-
-```ts
-const result = await FileUploader.downloadFile({
-  path: 'https://example.com/report.pdf',
-  name: 'report.pdf',
-});
-
-if (result.status) {
-  console.log('Saved to', result.path); // file:///storage/.../Download/report.pdf
+    if (result.status) {
+      console.log('Upload success! HTTP Status:', result.httpStatus);
+      console.log('Server response output:', result.output);
+    } else {
+      console.error('Upload failed with output:', result.output);
+    }
+  } catch (error) {
+    console.error('Upload error:', error);
+  }
 }
 ```
 
-### Listen for download progress
-
-Register the listener before calling `downloadFile`:
+### 2. Upload Multiple Files (Batch Upload)
 
 ```ts
-const handle = await FileUploader.addListener('downloadStatus', info => {
-  // info: { path, start, finish, error, bytesDownloaded?, totalBytes?, message? }
-  if (info.start) console.log('Download started');
-  if (info.bytesDownloaded != null) {
-    console.log(`${info.bytesDownloaded} / ${info.totalBytes}`);
+import { FileUploader } from '@bolt/file-uploader';
+
+async function handleBatchUpload() {
+  const result = await FileUploader.uploadFiles({
+    url: 'https://api.example.com/v1/upload-batch',
+    token: 'your-bearer-token',
+    fileKey: 'documents[]',             // Optional: Form field name for files (default: "files[]")
+    files: [
+      { path: '/path/to/document1.pdf' },
+      { path: 'file:///path/to/document2.pdf' },
+    ],
+    data: {
+      folderId: 'folder_99',
+    },
+  });
+
+  console.log('Batch upload status:', result.status);
+}
+```
+
+### 3. Resolve Native Paths (`content://` URIs)
+
+When using an Android media picker, paths are often returned as `content://` URIs. Use `resolveNativePath` to convert them to standard file system paths prior to uploading.
+
+```ts
+import { FileUploader } from '@bolt/file-uploader';
+
+async function getRealPath(contentUri: string) {
+  const { path } = await FileUploader.resolveNativePath({
+    path: contentUri, // e.g., 'content://com.android.providers.media.documents/document/image%3A123'
+  });
+
+  console.log('Resolved absolute native path:', path);
+  return path;
+}
+```
+
+*Note: If direct MediaStore query fails, the plugin safely streams the content into the app's cache directory and returns the cached file path.*
+
+### 4. Download a File with Real-Time Progress
+
+```ts
+import { FileUploader } from '@bolt/file-uploader';
+
+async function startDownload() {
+  // 1. Listen for download progress updates before initiating download
+  const progressListener = await FileUploader.addListener('downloadStatus', info => {
+    if (info.start) {
+      console.log('Download started for:', info.path);
+    }
+    
+    if (info.bytesDownloaded !== undefined && info.totalBytes) {
+      const percentage = Math.round((info.bytesDownloaded / info.totalBytes) * 100);
+      console.log(`Progress: ${percentage}% (${info.bytesDownloaded}/${info.totalBytes} bytes)`);
+    }
+    
+    if (info.finish) {
+      console.log('Download completed successfully:', info.path);
+    }
+    
+    if (info.error) {
+      console.error('Download error:', info.message);
+    }
+  });
+
+  // 2. Trigger file download
+  const result = await FileUploader.downloadFile({
+    path: 'https://example.com/files/annual-report.pdf',
+    name: 'annual-report.pdf',
+  });
+
+  if (result.status) {
+    console.log('File saved locally at:', result.path);
   }
-  if (info.finish) console.log('Download complete');
-  if (info.error) console.log('Download failed');
-});
 
-await FileUploader.downloadFile({
-  path: 'https://example.com/large-file.zip',
-  name: 'large-file.zip',
-});
-
-await handle.remove();
+  // 3. Clean up event listener when finished
+  await progressListener.remove();
+}
 ```
 
-### Open a downloaded file
+### 5. Open a Downloaded File
 
-Opens a file from the **Downloads** folder with the system viewer:
+Opens the file with the operating system's native viewer (e.g. PDF reader, image viewer).
 
 ```ts
-const result = await FileUploader.openFile({
-  path: 'file:///storage/emulated/0/Download/report.pdf',
-  type: 'application/pdf',          // optional (default: application/pdf)
-});
+import { FileUploader } from '@bolt/file-uploader';
+
+async function openReport(filePath: string) {
+  const result = await FileUploader.openFile({
+    path: filePath,                     // File path or file:// URI
+    type: 'application/pdf',            // Optional: MIME type (default: application/pdf)
+  });
+
+  if (!result.status) {
+    console.warn('Could not open file:', result.message);
+  }
+}
 ```
 
-## Android notes
+### 6. Storage Permissions
 
-- The plugin merges a `FileProvider` (`${applicationId}.fileprovider`) for opening files.
-- Downloads are saved to `Environment.DIRECTORY_DOWNLOADS`.
-- `openFile` looks for the file by name in the Downloads folder.
-- On non-Android platforms, all methods throw: `FileUpload is not implemented on "<platform>". Android only plugin.`
+```ts
+import { FileUploader } from '@bolt/file-uploader';
 
-## Development
+async function checkAndRequestPermissions() {
+  let status = await FileUploader.checkPermissions();
+  if (status.storage !== 'granted') {
+    status = await FileUploader.requestPermissions();
+  }
+  console.log('Storage permission:', status.storage);
+}
+```
 
-Clone and build:
+---
+
+## API Reference
+
+### Methods
+
+| Method | Parameters | Returns | Description |
+| :--- | :--- | :--- | :--- |
+| `uploadFile(options)` | `UploadFileOptions` | `Promise<UploadResult>` | Uploads a single file using multipart HTTP POST. |
+| `uploadFiles(options)` | `UploadFilesOptions` | `Promise<UploadResult>` | Uploads multiple files in a single multipart POST. |
+| `downloadFile(options)` | `DownloadFileOptions` | `Promise<DownloadResult>` | Downloads a remote file to public Downloads (Android) or Documents (iOS). |
+| `openFile(options)` | `OpenFileOptions` | `Promise<OpenResult>` | Opens a local file with the default system application. |
+| `resolveNativePath(options)` | `ResolveNativePathOptions` | `Promise<ResolveNativePathResult>` | Resolves `content://` or `file://` URIs to native absolute file paths. |
+| `checkPermissions()` | None | `Promise<PermissionStatus>` | Checks external storage permissions status. |
+| `requestPermissions()` | None | `Promise<PermissionStatus>` | Requests external storage permissions from the user. |
+| `addListener('downloadStatus', fn)` | Event Name, Callback | `Promise<PluginListenerHandle>` | Subscribes to download progress and completion events. |
+| `removeAllListeners()` | None | `Promise<void>` | Removes all active plugin event listeners. |
+
+---
+
+## Type Definitions
+
+```ts
+export interface UploadFileOptions {
+  url: string;                          // Destination endpoint URL
+  token?: string;                       // Optional Bearer token
+  data?: Record<string, unknown>;       // Optional additional form parameters
+  fileKey?: string;                     // Multipart field name (default: "file")
+  file: string;                         // File path or file:// URI
+}
+
+export interface UploadFilesOptions {
+  url: string;                          // Destination endpoint URL
+  token?: string;                       // Optional Bearer token
+  data?: Record<string, unknown>;       // Optional additional form parameters
+  fileKey?: string;                     // Multipart field name (default: "files[]")
+  files: UploadFileItem[];              // Array of file objects
+}
+
+export interface UploadFileItem {
+  path: string;                         // File path or file:// URI
+}
+
+export interface UploadResult {
+  status: boolean;                      // True if HTTP status is 2xx
+  httpStatus?: number;                  // HTTP Status code (e.g., 200, 400, 500)
+  output: unknown;                      // Parsed JSON response body or { raw: string }
+}
+
+export interface DownloadFileOptions {
+  path: string;                         // Remote file URL
+  name: string;                         // Target filename to save as
+}
+
+export interface DownloadResult {
+  path: string;                         // Local file path where saved
+  status: boolean;                      // True if download completed successfully
+  error: boolean;                       // True if an error occurred
+  message?: string;                     // Error description if failed
+}
+
+export interface OpenFileOptions {
+  path: string;                         // Local file path or file:// URI
+  type?: string;                        // Optional MIME type (default: "application/pdf")
+}
+
+export interface OpenResult {
+  path?: string;                        // File path attempted
+  status: boolean;                      // True if file viewer launched successfully
+  error: boolean;                       // True if failed to open
+  message?: string;                     // Error message if opening failed
+}
+
+export interface ResolveNativePathOptions {
+  path: string;                         // content:// or file:// URI string
+}
+
+export interface ResolveNativePathResult {
+  path: string;                         // Absolute filesystem path
+}
+
+export interface DownloadStatusInfo {
+  path: string;                         // Target file path
+  start: boolean;                       // True when download begins
+  finish: boolean;                      // True when download finishes successfully
+  error: boolean;                       // True if download fails
+  bytesDownloaded?: number;             // Total bytes downloaded so far
+  totalBytes?: number;                  // Expected total size in bytes
+  message?: string;                     // Error details if failed
+}
+
+export interface PermissionStatus {
+  storage: PermissionState;             // 'prompt' | 'prompt-with-rationale' | 'granted' | 'denied'
+}
+```
+
+---
+
+## Platform Details
+
+### Android
+- **File Opening**: Utilizes Android's `FileProvider` (`${applicationId}.fileprovider`) to securely share URIs with external viewer apps via `Intent.ACTION_VIEW`.
+- **Downloads Directory**: Files are downloaded directly to public `Environment.DIRECTORY_DOWNLOADS`.
+- **URI Resolution**: Handles `content://` URIs by querying `MediaStore`. If access is restricted, the plugin seamlessly copies the content stream into the app's cache folder (`cacheDir`).
+
+### iOS
+- **File Storage**: Downloads are stored in the app's standard `DocumentsDirectory`.
+- **File Opening**: Utilizes `UIDocumentInteractionController` to present a full preview or system "Open In" menu.
+- **URI Resolution**: Automatically decodes percent-encoded `file://` paths to POSIX paths.
+- **Permissions**: `checkPermissions` and `requestPermissions` return `"granted"` (as iOS manages file access via standard app sandbox scopes).
+
+### Web
+- Calling any method on Web will throw an explicit error: `FileUpload is not implemented on "<platform>"`.
+
+---
+
+## Development & Building
+
+To build the plugin locally:
 
 ```bash
-git clone https://github.com/pioneersingh321/file-uploader.git
-cd file-uploader
+# Install dependencies
 npm install
+
+# Build TypeScript and bundle via Rollup
 npm run build
-```
 
-Watch TypeScript during development:
-
-```bash
+# Watch for TypeScript changes during development
 npm run watch
 ```
 
-## API reference
-
-| Method | Description |
-|--------|-------------|
-| `uploadFile(options)` | Multipart upload of one file |
-| `uploadFiles(options)` | Multipart upload of multiple files |
-| `resolveNativePath(options)` | Resolve `content://` or `file://` to a native path |
-| `downloadFile(options)` | Download a URL to the Downloads folder |
-| `openFile(options)` | Open a downloaded file with a system app |
-| `addListener('downloadStatus', fn)` | Subscribe to download progress/completion |
-| `removeAllListeners()` | Remove all plugin listeners |
-
-## Changelog
-
-See [CHANGELOG.md](CHANGELOG.md).
+---
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE) © Pioneer Singh
