@@ -14,35 +14,31 @@ import type {
 } from './definitions';
 
 export class FileUploaderWeb extends WebPlugin implements FileUploaderPlugin {
-  private notImplemented(): never {
-    throw new Error('FileUpload is not implemented on web.');
-  }
-
   async uploadFiles(_options: UploadFilesOptions): Promise<UploadResult> {
-    this.notImplemented();
+    throw this.unimplemented('uploadFiles is not implemented on web.');
   }
 
   async uploadFile(_options: UploadFileOptions): Promise<UploadResult> {
-    this.notImplemented();
+    throw this.unimplemented('uploadFile is not implemented on web.');
   }
 
   async downloadFile(_options: DownloadFileOptions): Promise<DownloadResult> {
-    this.notImplemented();
+    throw this.unimplemented('downloadFile is not implemented on web.');
   }
 
   async openFile(_options: OpenFileOptions): Promise<OpenResult> {
-    this.notImplemented();
+    throw this.unimplemented('openFile is not implemented on web.');
   }
 
   async resolveNativePath(_options: ResolveNativePathOptions): Promise<ResolveNativePathResult> {
-    this.notImplemented();
+    throw this.unimplemented('resolveNativePath is not implemented on web.');
   }
 
   async checkPermissions(): Promise<PermissionStatus> {
-    this.notImplemented();
+    throw this.unimplemented('checkPermissions is not implemented on web.');
   }
 
   async requestPermissions(): Promise<PermissionStatus> {
-    this.notImplemented();
+    throw this.unimplemented('requestPermissions is not implemented on web.');
   }
 }

@@ -8,7 +8,7 @@ public class FileUploaderPlugin: CAPPlugin, UIDocumentInteractionControllerDeleg
     private var activeDownloaders: [String: FileDownloader] = [:]
     private var documentInteractionController: UIDocumentInteractionController?
     
-    @objc func uploadFiles(_ call: CAPPluginCall) {
+    @objc public func uploadFiles(_ call: CAPPluginCall) {
         guard let urlString = call.getString("url") else {
             call.reject("url is required")
             return
@@ -96,7 +96,7 @@ public class FileUploaderPlugin: CAPPlugin, UIDocumentInteractionControllerDeleg
         task.resume()
     }
     
-    @objc func uploadFile(_ call: CAPPluginCall) {
+    @objc public func uploadFile(_ call: CAPPluginCall) {
         guard let urlString = call.getString("url") else {
             call.reject("url is required")
             return
@@ -172,7 +172,7 @@ public class FileUploaderPlugin: CAPPlugin, UIDocumentInteractionControllerDeleg
         task.resume()
     }
     
-    @objc func downloadFile(_ call: CAPPluginCall) {
+    @objc public func downloadFile(_ call: CAPPluginCall) {
         guard let path = call.getString("path") else {
             call.reject("path is required")
             return
@@ -203,9 +203,19 @@ public class FileUploaderPlugin: CAPPlugin, UIDocumentInteractionControllerDeleg
         downloader.start(from: url)
     }
     
-    @objc func openFile(_ call: CAPPluginCall) {
+    @objc public func openFile(_ call: CAPPluginCall) {
         guard let path = call.getString("path") else {
             call.reject("path is required")
+            return
+        }
+        
+        if path.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("content://") {
+            call.resolve([
+                "status": false,
+                "error": true,
+                "message": "content:// URIs are Android-specific and not supported on iOS",
+                "path": path
+            ])
             return
         }
         
@@ -225,8 +235,8 @@ public class FileUploaderPlugin: CAPPlugin, UIDocumentInteractionControllerDeleg
         }
         
         DispatchQueue.main.async {
-            guard let viewController = self.bridge?.viewController else {
-                call.reject("Unable to get view controller")
+            guard let viewController = self.getTopViewController() else {
+                call.reject("Unable to get active view controller")
                 return
             }
             
@@ -235,7 +245,7 @@ public class FileUploaderPlugin: CAPPlugin, UIDocumentInteractionControllerDeleg
             
             let presented = self.documentInteractionController?.presentPreview(animated: true) ?? false
             if !presented {
-                let opened = self.documentInteractionController?.presentOpenInMenu(
+                let opened = self.documentInteractionController?.presentOptionsMenu(
                     from: viewController.view.bounds,
                     in: viewController.view,
                     animated: true
@@ -260,34 +270,34 @@ public class FileUploaderPlugin: CAPPlugin, UIDocumentInteractionControllerDeleg
         }
     }
     
-    @objc func resolveNativePath(_ call: CAPPluginCall) {
+    @objc public func resolveNativePath(_ call: CAPPluginCall) {
         guard let path = call.getString("path") else {
             call.reject("path is required")
             return
         }
         
-        var resolvedPath = path
-        if path.hasPrefix("file://") {
-            let pathWithoutScheme = path.replacingOccurrences(of: "file://", with: "")
-            if let decodedPath = pathWithoutScheme.removingPercentEncoding {
-                resolvedPath = decodedPath
-            } else {
-                resolvedPath = pathWithoutScheme
-            }
+        if path.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("content://") {
+            call.reject("content:// URIs are Android-specific and not supported on iOS")
+            return
+        }
+        
+        guard let fileUrl = getFileUrl(path) else {
+            call.reject("Invalid path")
+            return
         }
         
         call.resolve([
-            "path": resolvedPath
+            "path": fileUrl.path
         ])
     }
     
-    @objc func checkPermissions(_ call: CAPPluginCall) {
+    @objc override public func checkPermissions(_ call: CAPPluginCall) {
         call.resolve([
             "storage": "granted"
         ])
     }
     
-    @objc func requestPermissions(_ call: CAPPluginCall) {
+    @objc override public func requestPermissions(_ call: CAPPluginCall) {
         call.resolve([
             "storage": "granted"
         ])
@@ -296,21 +306,49 @@ public class FileUploaderPlugin: CAPPlugin, UIDocumentInteractionControllerDeleg
     // MARK: - UIDocumentInteractionControllerDelegate
     
     public func documentInteractionControllerViewControllerForPreview(_ controller: UIDocumentInteractionController) -> UIViewController {
-        return self.bridge?.viewController ?? UIViewController()
+        return self.getTopViewController() ?? UIViewController()
+    }
+    
+    public func documentInteractionControllerDidEndPreview(_ controller: UIDocumentInteractionController) {
+        self.documentInteractionController = nil
     }
     
     // MARK: - Helpers
     
+    private func getTopViewController() -> UIViewController? {
+        var topController = self.bridge?.viewController ?? self.viewController
+        while let presented = topController?.presentedViewController {
+            topController = presented
+        }
+        return topController
+    }
+    
     private func getFileUrl(_ path: String) -> URL? {
         let cleanPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleanPath.hasPrefix("file://") {
-            let pathWithoutScheme = cleanPath.replacingOccurrences(of: "file://", with: "")
-            if let decodedPath = pathWithoutScheme.removingPercentEncoding {
-                return URL(fileURLWithPath: decodedPath)
-            }
-            return URL(fileURLWithPath: pathWithoutScheme)
+        if cleanPath.isEmpty || cleanPath.hasPrefix("content://") {
+            return nil
         }
-        return URL(fileURLWithPath: cleanPath)
+        
+        // Handle Capacitor WebView file URLs (e.g. capacitor://localhost/_capacitor_file_/var/...)
+        if cleanPath.contains("_capacitor_file_") {
+            if let range = cleanPath.range(of: "_capacitor_file_") {
+                let subPath = String(cleanPath[range.upperBound...])
+                let decoded = subPath.removingPercentEncoding ?? subPath
+                return URL(fileURLWithPath: decoded)
+            }
+        }
+        
+        if cleanPath.hasPrefix("file://") {
+            if let url = URL(string: cleanPath) {
+                return url
+            }
+            let pathWithoutScheme = cleanPath.replacingOccurrences(of: "file://", with: "")
+            let decoded = pathWithoutScheme.removingPercentEncoding ?? pathWithoutScheme
+            return URL(fileURLWithPath: decoded)
+        }
+        
+        let decoded = cleanPath.removingPercentEncoding ?? cleanPath
+        return URL(fileURLWithPath: decoded)
     }
     
     private func getMimeType(from url: URL) -> String {
@@ -401,6 +439,16 @@ class FileDownloader: NSObject, URLSessionDownloadDelegate {
     }
     
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        if let httpResponse = downloadTask.response as? HTTPURLResponse {
+            let statusCode = httpResponse.statusCode
+            if statusCode < 200 || statusCode >= 300 {
+                fail(with: "HTTP download failed with status code: \(statusCode)")
+                session.invalidateAndCancel()
+                completion(downloadId)
+                return
+            }
+        }
+        
         let fileManager = FileManager.default
         do {
             if fileManager.fileExists(atPath: destinationUrl.path) {
