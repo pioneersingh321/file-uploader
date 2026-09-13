@@ -19,7 +19,8 @@
   "files": [
     "android/",
     "ios/",
-    "dist/"
+    "dist/",
+    "Package.swift"
   ],
   "author": "",
   "license": "MIT",
