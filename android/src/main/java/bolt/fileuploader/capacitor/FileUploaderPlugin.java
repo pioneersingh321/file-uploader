@@ -39,14 +39,14 @@ public class FileUploaderPlugin extends Plugin {
         if (!isStoragePermissionGranted()) {
             requestPermissionForAlias("storage", call, "uploadFilesPermissionCallback");
         } else {
-            uploadManager.startUploadFiles(call);
+            uploadManager.startUploadFiles(getContext(), call);
         }
     }
 
     @PermissionCallback
     private void uploadFilesPermissionCallback(PluginCall call) {
         if (isStoragePermissionGranted()) {
-            uploadManager.startUploadFiles(call);
+            uploadManager.startUploadFiles(getContext(), call);
         } else {
             call.reject("Storage permission is required to upload files");
         }
@@ -57,14 +57,14 @@ public class FileUploaderPlugin extends Plugin {
         if (!isStoragePermissionGranted()) {
             requestPermissionForAlias("storage", call, "uploadFilePermissionCallback");
         } else {
-            uploadManager.startUploadFile(call);
+            uploadManager.startUploadFile(getContext(), call);
         }
     }
 
     @PermissionCallback
     private void uploadFilePermissionCallback(PluginCall call) {
         if (isStoragePermissionGranted()) {
-            uploadManager.startUploadFile(call);
+            uploadManager.startUploadFile(getContext(), call);
         } else {
             call.reject("Storage permission is required to upload file");
         }

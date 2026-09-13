@@ -1,20 +1,30 @@
 import Foundation
 import Capacitor
+import UIKit
 import UniformTypeIdentifiers
+import MobileCoreServices
 
 @objc(FileUploaderPlugin)
-public class FileUploaderPlugin: CAPPlugin, UIDocumentInteractionControllerDelegate {
+public class FileUploaderPlugin: CAPPlugin {
     
     private var activeDownloaders: [String: FileDownloader] = [:]
-    private var documentInteractionController: UIDocumentInteractionController?
+    private let downloadersLock = NSLock()
+    
+    private var activeOpeners: [String: FileOpenerSession] = [:]
+    private let openersLock = NSLock()
+    
+    // MARK: - Upload Files
     
     @objc public func uploadFiles(_ call: CAPPluginCall) {
-        guard let urlString = call.getString("url") else {
-            call.reject("url is required")
+        call.keepAlive = true
+        
+        guard let urlString = call.getString("url"), !urlString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            resolveReject(call, "url is required")
             return
         }
-        guard let filesArray = call.getArray("files") else {
-            call.reject("files is required and cannot be empty")
+        
+        guard let filesArray = call.getArray("files"), !filesArray.isEmpty else {
+            resolveReject(call, "files is required and cannot be empty")
             return
         }
         
@@ -23,24 +33,28 @@ public class FileUploaderPlugin: CAPPlugin, UIDocumentInteractionControllerDeleg
         let data = call.getObject("data")
         
         guard let targetUrl = URL(string: urlString) else {
-            call.reject("Invalid URL")
+            resolveReject(call, "Invalid URL")
             return
         }
         
         var filesToUpload: [(key: String, fileName: String, fileUrl: URL, mimeType: String)] = []
         
-        for item in filesArray {
+        for (index, item) in filesArray.enumerated() {
             guard let fileItem = item as? [String: Any],
-                  let filePath = fileItem["path"] as? String else {
-                continue
+                  let filePath = fileItem["path"] as? String,
+                  !filePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                resolveReject(call, "Invalid or missing 'path' for file at index \(index)")
+                return
             }
             
             guard let fileUrl = getFileUrl(filePath) else {
-                continue
+                resolveReject(call, "Invalid file path at index \(index): \(filePath)")
+                return
             }
             
             if !FileManager.default.fileExists(atPath: fileUrl.path) {
-                continue
+                resolveReject(call, "File does not exist at index \(index): \(fileUrl.path)")
+                return
             }
             
             let fileName = fileUrl.lastPathComponent
@@ -50,7 +64,7 @@ public class FileUploaderPlugin: CAPPlugin, UIDocumentInteractionControllerDeleg
         }
         
         if filesToUpload.isEmpty {
-            call.reject("No valid files to upload found")
+            resolveReject(call, "No valid files to upload found")
             return
         }
         
@@ -63,46 +77,60 @@ public class FileUploaderPlugin: CAPPlugin, UIDocumentInteractionControllerDeleg
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         
-        let postBody = createMultipartBody(parameters: data, boundary: boundary, files: filesToUpload)
+        let postBody: Data
+        do {
+            postBody = try createMultipartBody(parameters: data, boundary: boundary, files: filesToUpload)
+        } catch {
+            resolveReject(call, "Failed to create multipart request: \(error.localizedDescription)")
+            return
+        }
         
-        let task = URLSession.shared.uploadTask(with: request, from: postBody) { data, response, error in
-            if let error = error {
-                call.resolve([
-                    "status": false,
-                    "output": error.localizedDescription
-                ])
-                return
-            }
-            
-            let httpResponse = response as? HTTPURLResponse
-            let statusCode = httpResponse?.statusCode ?? 0
-            let isSuccess = statusCode >= 200 && statusCode < 300
-            
-            var output: Any = [:]
-            if let data = data {
-                if let json = try? JSONSerialization.jsonObject(with: data, options: []) {
-                    output = json
-                } else if let rawString = String(data: data, encoding: .utf8) {
-                    output = ["raw": rawString]
+        request.setValue("\(postBody.count)", forHTTPHeaderField: "Content-Length")
+        
+        let task = URLSession.shared.uploadTask(with: request, from: postBody) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    self?.resolveSuccess(call, [
+                        "status": false,
+                        "output": error.localizedDescription
+                    ])
+                    return
                 }
+                
+                let httpResponse = response as? HTTPURLResponse
+                let statusCode = httpResponse?.statusCode ?? 0
+                let isSuccess = statusCode >= 200 && statusCode < 300
+                
+                var output: Any = [:]
+                if let data = data {
+                    if let json = try? JSONSerialization.jsonObject(with: data, options: []) {
+                        output = json
+                    } else if let rawString = String(data: data, encoding: .utf8) {
+                        output = ["raw": rawString]
+                    }
+                }
+                
+                self?.resolveSuccess(call, [
+                    "status": isSuccess,
+                    "httpStatus": statusCode,
+                    "output": output
+                ])
             }
-            
-            call.resolve([
-                "status": isSuccess,
-                "httpStatus": statusCode,
-                "output": output
-            ])
         }
         task.resume()
     }
     
+    // MARK: - Upload File
+    
     @objc public func uploadFile(_ call: CAPPluginCall) {
-        guard let urlString = call.getString("url") else {
-            call.reject("url is required")
+        call.keepAlive = true
+        
+        guard let urlString = call.getString("url"), !urlString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            resolveReject(call, "url is required")
             return
         }
-        guard let file = call.getString("file") else {
-            call.reject("file is required")
+        guard let file = call.getString("file"), !file.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            resolveReject(call, "file is required")
             return
         }
         
@@ -111,17 +139,17 @@ public class FileUploaderPlugin: CAPPlugin, UIDocumentInteractionControllerDeleg
         let data = call.getObject("data")
         
         guard let targetUrl = URL(string: urlString) else {
-            call.reject("Invalid URL")
+            resolveReject(call, "Invalid URL")
             return
         }
         
         guard let fileUrl = getFileUrl(file) else {
-            call.reject("Invalid file path")
+            resolveReject(call, "Invalid file path")
             return
         }
         
         if !FileManager.default.fileExists(atPath: fileUrl.path) {
-            call.reject("File does not exist: \(fileUrl.path)")
+            resolveReject(call, "File does not exist: \(fileUrl.path)")
             return
         }
         
@@ -136,81 +164,110 @@ public class FileUploaderPlugin: CAPPlugin, UIDocumentInteractionControllerDeleg
         
         let fileName = fileUrl.lastPathComponent
         let mimeType = getMimeType(from: fileUrl)
-        
         let files = [(key: fileKey, fileName: fileName, fileUrl: fileUrl, mimeType: mimeType)]
         
-        let postBody = createMultipartBody(parameters: data, boundary: boundary, files: files)
+        let postBody: Data
+        do {
+            postBody = try createMultipartBody(parameters: data, boundary: boundary, files: files)
+        } catch {
+            resolveReject(call, "Failed to create multipart request: \(error.localizedDescription)")
+            return
+        }
         
-        let task = URLSession.shared.uploadTask(with: request, from: postBody) { data, response, error in
-            if let error = error {
-                call.resolve([
-                    "status": false,
-                    "output": error.localizedDescription
-                ])
-                return
-            }
-            
-            let httpResponse = response as? HTTPURLResponse
-            let statusCode = httpResponse?.statusCode ?? 0
-            let isSuccess = statusCode >= 200 && statusCode < 300
-            
-            var output: Any = [:]
-            if let data = data {
-                if let json = try? JSONSerialization.jsonObject(with: data, options: []) {
-                    output = json
-                } else if let rawString = String(data: data, encoding: .utf8) {
-                    output = ["raw": rawString]
+        request.setValue("\(postBody.count)", forHTTPHeaderField: "Content-Length")
+        
+        let task = URLSession.shared.uploadTask(with: request, from: postBody) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    self?.resolveSuccess(call, [
+                        "status": false,
+                        "output": error.localizedDescription
+                    ])
+                    return
                 }
+                
+                let httpResponse = response as? HTTPURLResponse
+                let statusCode = httpResponse?.statusCode ?? 0
+                let isSuccess = statusCode >= 200 && statusCode < 300
+                
+                var output: Any = [:]
+                if let data = data {
+                    if let json = try? JSONSerialization.jsonObject(with: data, options: []) {
+                        output = json
+                    } else if let rawString = String(data: data, encoding: .utf8) {
+                        output = ["raw": rawString]
+                    }
+                }
+                
+                self?.resolveSuccess(call, [
+                    "status": isSuccess,
+                    "httpStatus": statusCode,
+                    "output": output
+                ])
             }
-            
-            call.resolve([
-                "status": isSuccess,
-                "httpStatus": statusCode,
-                "output": output
-            ])
         }
         task.resume()
     }
     
+    // MARK: - Download File
+    
     @objc public func downloadFile(_ call: CAPPluginCall) {
-        guard let path = call.getString("path") else {
-            call.reject("path is required")
+        call.keepAlive = true
+        
+        guard let path = call.getString("path"), !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            resolveReject(call, "path is required")
             return
         }
-        guard let fileName = call.getString("name") else {
-            call.reject("name is required")
+        guard let fileName = call.getString("name"), !fileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            resolveReject(call, "name is required")
             return
         }
         
         guard let url = URL(string: path) else {
-            call.reject("Invalid URL")
+            resolveReject(call, "Invalid URL")
             return
         }
         
         let fileManager = FileManager.default
         guard let documentsDirectory = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
-            call.reject("Unable to access documents directory")
+            resolveReject(call, "Unable to access documents directory")
             return
         }
         let destinationUrl = documentsDirectory.appendingPathComponent(fileName)
         
         let downloadId = UUID().uuidString
         let downloader = FileDownloader(plugin: self, call: call, destinationUrl: destinationUrl, downloadId: downloadId) { [weak self] id in
-            self?.activeDownloaders.removeValue(forKey: id)
+            self?.removeDownloader(id: id)
         }
         
-        activeDownloaders[downloadId] = downloader
+        addDownloader(id: downloadId, downloader: downloader)
         downloader.start(from: url)
     }
     
+    private func addDownloader(id: String, downloader: FileDownloader) {
+        downloadersLock.lock()
+        defer { downloadersLock.unlock() }
+        activeDownloaders[id] = downloader
+    }
+    
+    private func removeDownloader(id: String) {
+        downloadersLock.lock()
+        defer { downloadersLock.unlock() }
+        activeDownloaders.removeValue(forKey: id)
+    }
+    
+    // MARK: - Open File
+    
     @objc public func openFile(_ call: CAPPluginCall) {
-        guard let path = call.getString("path") else {
-            call.reject("path is required")
+        call.keepAlive = true
+        
+        guard let path = call.getString("path"), !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            resolveReject(call, "path is required")
             return
         }
         
         if path.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("content://") {
-            call.resolve([
+            resolveSuccess(call, [
                 "status": false,
                 "error": true,
                 "message": "content:// URIs are Android-specific and not supported on iOS",
@@ -220,12 +277,12 @@ public class FileUploaderPlugin: CAPPlugin, UIDocumentInteractionControllerDeleg
         }
         
         guard let fileUrl = getFileUrl(path) else {
-            call.reject("Invalid file path")
+            resolveReject(call, "Invalid file path")
             return
         }
         
         if !FileManager.default.fileExists(atPath: fileUrl.path) {
-            call.resolve([
+            resolveSuccess(call, [
                 "status": false,
                 "error": true,
                 "message": "File not found",
@@ -234,99 +291,150 @@ public class FileUploaderPlugin: CAPPlugin, UIDocumentInteractionControllerDeleg
             return
         }
         
-        DispatchQueue.main.async {
-            guard let viewController = self.getTopViewController() else {
-                call.reject("Unable to get active view controller")
-                return
-            }
-            
-            self.documentInteractionController = UIDocumentInteractionController(url: fileUrl)
-            self.documentInteractionController?.delegate = self
-            
-            let presented = self.documentInteractionController?.presentPreview(animated: true) ?? false
-            if !presented {
-                let opened = self.documentInteractionController?.presentOptionsMenu(
-                    from: viewController.view.bounds,
-                    in: viewController.view,
-                    animated: true
-                ) ?? false
-                
-                if !opened {
-                    call.resolve([
-                        "status": false,
-                        "error": true,
-                        "message": "No app found to open this file",
-                        "path": fileUrl.path
-                    ])
-                    return
-                }
-            }
-            
-            call.resolve([
-                "status": true,
-                "error": false,
-                "path": fileUrl.path
-            ])
+        let explicitMimeType = call.getString("type")
+        let sessionId = UUID().uuidString
+        
+        let openerSession = FileOpenerSession(
+            id: sessionId,
+            plugin: self,
+            call: call,
+            fileUrl: fileUrl,
+            mimeType: explicitMimeType
+        ) { [weak self] id in
+            self?.removeOpener(id: id)
         }
+        
+        addOpener(id: sessionId, opener: openerSession)
+        openerSession.start()
     }
     
+    private func addOpener(id: String, opener: FileOpenerSession) {
+        openersLock.lock()
+        defer { openersLock.unlock() }
+        activeOpeners[id] = opener
+    }
+    
+    private func removeOpener(id: String) {
+        openersLock.lock()
+        defer { openersLock.unlock() }
+        activeOpeners.removeValue(forKey: id)
+    }
+    
+    // MARK: - Resolve Native Path
+    
     @objc public func resolveNativePath(_ call: CAPPluginCall) {
-        guard let path = call.getString("path") else {
-            call.reject("path is required")
+        call.keepAlive = true
+        
+        guard let path = call.getString("path"), !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            resolveReject(call, "path is required")
             return
         }
         
         if path.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("content://") {
-            call.reject("content:// URIs are Android-specific and not supported on iOS")
+            resolveReject(call, "content:// URIs are Android-specific and not supported on iOS")
             return
         }
         
         guard let fileUrl = getFileUrl(path) else {
-            call.reject("Invalid path")
+            resolveReject(call, "Invalid path")
             return
         }
         
-        call.resolve([
+        resolveSuccess(call, [
             "path": fileUrl.path
         ])
     }
     
+    // MARK: - Permissions
+    
     @objc override public func checkPermissions(_ call: CAPPluginCall) {
-        call.resolve([
+        resolveSuccess(call, [
             "storage": "granted"
         ])
     }
     
     @objc override public func requestPermissions(_ call: CAPPluginCall) {
-        call.resolve([
+        resolveSuccess(call, [
             "storage": "granted"
         ])
     }
     
-    // MARK: - UIDocumentInteractionControllerDelegate
+    // MARK: - Bridge Helpers
     
-    public func documentInteractionControllerViewControllerForPreview(_ controller: UIDocumentInteractionController) -> UIViewController {
-        return self.getTopViewController() ?? UIViewController()
+    public func resolveSuccess(_ call: CAPPluginCall, _ data: [String: Any]) {
+        DispatchQueue.main.async {
+            call.resolve(data)
+        }
     }
     
-    public func documentInteractionControllerDidEndPreview(_ controller: UIDocumentInteractionController) {
-        self.documentInteractionController = nil
+    public func resolveReject(_ call: CAPPluginCall, _ message: String) {
+        DispatchQueue.main.async {
+            call.reject(message)
+        }
     }
     
-    // MARK: - Helpers
+    public func safeNotifyListeners(_ eventName: String, data: [String: Any]) {
+        DispatchQueue.main.async { [weak self] in
+            self?.notifyListeners(eventName, data: data)
+        }
+    }
     
-    private func getTopViewController() -> UIViewController? {
-        var topController = self.bridge?.viewController ?? self.viewController
+    // MARK: - View Hierarchy Helper
+    
+    public func getTopViewController() -> UIViewController? {
+        var topController: UIViewController? = self.bridge?.viewController ?? self.viewController
+        
+        if topController == nil {
+            if #available(iOS 13.0, *) {
+                let activeScenes = UIApplication.shared.connectedScenes
+                    .filter { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive }
+                    .compactMap { $0 as? UIWindowScene }
+                for scene in activeScenes {
+                    if let keyWindow = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first {
+                        topController = keyWindow.rootViewController
+                        break
+                    }
+                }
+            }
+            if topController == nil {
+                topController = UIApplication.shared.windows.first(where: { $0.isKeyWindow })?.rootViewController
+                    ?? UIApplication.shared.windows.first?.rootViewController
+            }
+        }
+        
         while let presented = topController?.presentedViewController {
             topController = presented
         }
+        
+        if let navigationController = topController as? UINavigationController,
+           let visibleController = navigationController.visibleViewController {
+            topController = visibleController
+        }
+        
+        if let tabBarController = topController as? UITabBarController,
+           let selectedController = tabBarController.selectedViewController {
+            topController = selectedController
+        }
+        
         return topController
     }
     
-    private func getFileUrl(_ path: String) -> URL? {
-        let cleanPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+    // MARK: - File URL Parsing
+    
+    public func getFileUrl(_ path: String) -> URL? {
+        var cleanPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
         if cleanPath.isEmpty || cleanPath.hasPrefix("content://") {
             return nil
+        }
+        
+        // Remove query parameters or fragments if attached
+        if let urlObj = URL(string: cleanPath), urlObj.scheme != nil {
+            if let queryRange = cleanPath.range(of: "?") {
+                cleanPath = String(cleanPath[..<queryRange.lowerBound])
+            }
+            if let fragmentRange = cleanPath.range(of: "#") {
+                cleanPath = String(cleanPath[..<fragmentRange.lowerBound])
+            }
         }
         
         // Handle Capacitor WebView file URLs (e.g. capacitor://localhost/_capacitor_file_/var/...)
@@ -338,9 +446,21 @@ public class FileUploaderPlugin: CAPPlugin, UIDocumentInteractionControllerDeleg
             }
         }
         
+        if cleanPath.hasPrefix("capacitor://") {
+            let pathWithoutScheme = cleanPath.replacingOccurrences(of: "capacitor://", with: "")
+            let subPath: String
+            if let firstSlash = pathWithoutScheme.firstIndex(of: "/") {
+                subPath = String(pathWithoutScheme[firstSlash...])
+            } else {
+                subPath = "/" + pathWithoutScheme
+            }
+            let decoded = subPath.removingPercentEncoding ?? subPath
+            return URL(fileURLWithPath: decoded)
+        }
+        
         if cleanPath.hasPrefix("file://") {
-            if let url = URL(string: cleanPath) {
-                return url
+            if let url = URL(string: cleanPath), !url.path.isEmpty {
+                return URL(fileURLWithPath: url.path)
             }
             let pathWithoutScheme = cleanPath.replacingOccurrences(of: "file://", with: "")
             let decoded = pathWithoutScheme.removingPercentEncoding ?? pathWithoutScheme
@@ -351,59 +471,149 @@ public class FileUploaderPlugin: CAPPlugin, UIDocumentInteractionControllerDeleg
         return URL(fileURLWithPath: decoded)
     }
     
-    private func getMimeType(from url: URL) -> String {
+    // MARK: - MIME & UTI Detection
+    
+    public func getMimeType(from url: URL) -> String {
         let pathExtension = url.pathExtension
-        if let type = UTType(filenameExtension: pathExtension) {
-            return type.preferredMIMEType ?? "application/octet-stream"
+        if pathExtension.isEmpty {
+            return "application/octet-stream"
         }
+        
+        if #available(iOS 14.0, *) {
+            if let type = UTType(filenameExtension: pathExtension),
+               let mime = type.preferredMIMEType {
+                return mime
+            }
+        }
+        
+        if let uti = UTTypeCreatePreferredIdentifierForTag(kUTTagClassFilenameExtension, pathExtension as CFString, nil)?.takeRetainedValue() {
+            if let mime = UTTypeCopyPreferredTagWithClass(uti, kUTTagClassMIMEType)?.takeRetainedValue() as String? {
+                return mime
+            }
+        }
+        
         return "application/octet-stream"
+    }
+    
+    public func getUTI(mimeType: String?, fileUrl: URL) -> String? {
+        if let mime = mimeType, !mime.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if #available(iOS 14.0, *) {
+                if let type = UTType(mimeType: mime) {
+                    return type.identifier
+                }
+            }
+            if let uti = UTTypeCreatePreferredIdentifierForTag(kUTTagClassMIMEType, mime as CFString, nil)?.takeRetainedValue() {
+                return uti as String
+            }
+        }
+        
+        let ext = fileUrl.pathExtension
+        if !ext.isEmpty {
+            if #available(iOS 14.0, *) {
+                if let type = UTType(filenameExtension: ext) {
+                    return type.identifier
+                }
+            }
+            if let uti = UTTypeCreatePreferredIdentifierForTag(kUTTagClassFilenameExtension, ext as CFString, nil)?.takeRetainedValue() {
+                return uti as String
+            }
+        }
+        
+        return nil
+    }
+    
+    // MARK: - Multipart Construction
+    
+    private func sanitizeHeaderValue(_ value: String) -> String {
+        return value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\r", with: "")
+            .replacingOccurrences(of: "\n", with: "")
+    }
+    
+    private func serializeFormValue(_ value: Any) -> String {
+        if let str = value as? String {
+            return str
+        }
+        if let boolVal = value as? Bool {
+            return boolVal ? "true" : "false"
+        }
+        if let numVal = value as? NSNumber {
+            return numVal.stringValue
+        }
+        if JSONSerialization.isValidJSONObject(value),
+           let jsonData = try? JSONSerialization.data(withJSONObject: value, options: []),
+           let jsonStr = String(data: jsonData, encoding: .utf8) {
+            return jsonStr
+        }
+        return "\(value)"
     }
     
     private func createMultipartBody(
         parameters: [String: Any]?,
         boundary: String,
         files: [(key: String, fileName: String, fileUrl: URL, mimeType: String)]
-    ) -> Data {
+    ) throws -> Data {
         var body = Data()
         
+        // 1. Parameters
         if let parameters = parameters {
             for (key, value) in parameters {
-                body.append("--\(boundary)\r\n".data(using: .utf8)!)
-                body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".data(using: .utf8)!)
-                body.append("\(value)\r\n".data(using: .utf8)!)
+                let sanitizedKey = sanitizeHeaderValue(key)
+                let stringValue = serializeFormValue(value)
+                
+                body.safeAppend("--\(boundary)\r\n")
+                body.safeAppend("Content-Disposition: form-data; name=\"\(sanitizedKey)\"\r\n\r\n")
+                body.safeAppend("\(stringValue)\r\n")
             }
         }
         
+        // 2. Files
         for file in files {
-            guard let fileData = try? Data(contentsOf: file.fileUrl) else {
-                continue
-            }
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"\(file.key)\"; filename=\"\(file.fileName)\"\r\n".data(using: .utf8)!)
-            body.append("Content-Type: \(file.mimeType)\r\n\r\n".data(using: .utf8)!)
+            let fileData = try Data(contentsOf: file.fileUrl)
+            
+            let sanitizedKey = sanitizeHeaderValue(file.key)
+            let sanitizedFileName = sanitizeHeaderValue(file.fileName)
+            let sanitizedMimeType = sanitizeHeaderValue(file.mimeType)
+            
+            body.safeAppend("--\(boundary)\r\n")
+            body.safeAppend("Content-Disposition: form-data; name=\"\(sanitizedKey)\"; filename=\"\(sanitizedFileName)\"\r\n")
+            body.safeAppend("Content-Type: \(sanitizedMimeType)\r\n\r\n")
             body.append(fileData)
-            body.append("\r\n".data(using: .utf8)!)
+            body.safeAppend("\r\n")
         }
         
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        body.safeAppend("--\(boundary)--\r\n")
         
         return body
     }
-    
-    private func isBlank(_ value: String?) -> Bool {
-        return value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+}
+
+// MARK: - Safe Data Append Extension
+
+private extension Data {
+    mutating func safeAppend(_ string: String) {
+        if let data = string.data(using: .utf8) {
+            self.append(data)
+        }
     }
 }
 
+// MARK: - File Downloader
+
 class FileDownloader: NSObject, URLSessionDownloadDelegate {
-    private var plugin: CAPPlugin
+    private weak var plugin: FileUploaderPlugin?
     private var call: CAPPluginCall
     private var destinationUrl: URL
+    private var downloadId: String
     private var session: URLSession?
     private var completion: (String) -> Void
-    private var downloadId: String
     
-    init(plugin: CAPPlugin, call: CAPPluginCall, destinationUrl: URL, downloadId: String, completion: @escaping (String) -> Void) {
+    private var isResolved = false
+    private let stateLock = NSLock()
+    
+    init(plugin: FileUploaderPlugin, call: CAPPluginCall, destinationUrl: URL, downloadId: String, completion: @escaping (String) -> Void) {
         self.plugin = plugin
         self.call = call
         self.destinationUrl = destinationUrl
@@ -416,7 +626,7 @@ class FileDownloader: NSObject, URLSessionDownloadDelegate {
         let configuration = URLSessionConfiguration.default
         session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
         
-        plugin.notifyListeners("downloadStatus", data: [
+        plugin?.safeNotifyListeners("downloadStatus", data: [
             "path": destinationUrl.absoluteString,
             "start": true,
             "finish": false,
@@ -428,7 +638,7 @@ class FileDownloader: NSObject, URLSessionDownloadDelegate {
     }
     
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        plugin.notifyListeners("downloadStatus", data: [
+        plugin?.safeNotifyListeners("downloadStatus", data: [
             "path": destinationUrl.absoluteString,
             "start": false,
             "finish": false,
@@ -442,49 +652,82 @@ class FileDownloader: NSObject, URLSessionDownloadDelegate {
         if let httpResponse = downloadTask.response as? HTTPURLResponse {
             let statusCode = httpResponse.statusCode
             if statusCode < 200 || statusCode >= 300 {
-                fail(with: "HTTP download failed with status code: \(statusCode)")
-                session.invalidateAndCancel()
-                completion(downloadId)
+                failOnce(with: "HTTP download failed with status code: \(statusCode)")
+                cleanup()
                 return
             }
         }
         
         let fileManager = FileManager.default
+        let directory = destinationUrl.deletingLastPathComponent()
+        
         do {
-            if fileManager.fileExists(atPath: destinationUrl.path) {
-                try fileManager.removeItem(at: destinationUrl)
+            if !fileManager.fileExists(atPath: directory.path) {
+                try fileManager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
             }
-            try fileManager.moveItem(at: location, to: destinationUrl)
             
-            plugin.notifyListeners("downloadStatus", data: [
+            if fileManager.fileExists(atPath: destinationUrl.path) {
+                // Atomic replace
+                _ = try fileManager.replaceItemAt(destinationUrl, withItemAt: location, backupItemName: nil, options: [], resultingItemURL: nil)
+            } else {
+                try fileManager.moveItem(at: location, to: destinationUrl)
+            }
+            
+            plugin?.safeNotifyListeners("downloadStatus", data: [
                 "path": destinationUrl.absoluteString,
                 "start": false,
                 "finish": true,
                 "error": false
             ])
             
-            call.resolve([
+            resolveOnce([
                 "path": destinationUrl.absoluteString,
                 "status": true,
                 "error": false
             ])
         } catch {
-            fail(with: error.localizedDescription)
+            failOnce(with: "Failed to save downloaded file: \(error.localizedDescription)")
         }
-        session.invalidateAndCancel()
-        completion(downloadId)
+        
+        cleanup()
     }
     
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error = error {
-            fail(with: error.localizedDescription)
+            // If already resolved (e.g. from didFinishDownloadingTo), ignore cancellation error triggered by session invalidation
+            stateLock.lock()
+            let alreadyDone = isResolved
+            stateLock.unlock()
+            
+            if !alreadyDone {
+                failOnce(with: error.localizedDescription)
+            }
         }
-        session.invalidateAndCancel()
-        completion(downloadId)
+        cleanup()
     }
     
-    private func fail(with message: String) {
-        plugin.notifyListeners("downloadStatus", data: [
+    private func resolveOnce(_ result: [String: Any]) {
+        stateLock.lock()
+        guard !isResolved else {
+            stateLock.unlock()
+            return
+        }
+        isResolved = true
+        stateLock.unlock()
+        
+        plugin?.resolveSuccess(call, result)
+    }
+    
+    private func failOnce(with message: String) {
+        stateLock.lock()
+        guard !isResolved else {
+            stateLock.unlock()
+            return
+        }
+        isResolved = true
+        stateLock.unlock()
+        
+        plugin?.safeNotifyListeners("downloadStatus", data: [
             "path": destinationUrl.absoluteString,
             "start": false,
             "finish": false,
@@ -492,11 +735,168 @@ class FileDownloader: NSObject, URLSessionDownloadDelegate {
             "message": message
         ])
         
-        call.resolve([
+        plugin?.resolveSuccess(call, [
             "path": destinationUrl.absoluteString,
             "status": false,
             "error": true,
             "message": message
         ])
+    }
+    
+    private func cleanup() {
+        session?.finishTasksAndInvalidate()
+        session = nil
+        completion(downloadId)
+    }
+}
+
+// MARK: - File Opener Session
+
+class FileOpenerSession: NSObject, UIDocumentInteractionControllerDelegate {
+    private let sessionId: String
+    private weak var plugin: FileUploaderPlugin?
+    private var call: CAPPluginCall
+    private var fileUrl: URL
+    private var mimeType: String?
+    private var completion: (String) -> Void
+    
+    private var documentInteractionController: UIDocumentInteractionController?
+    private var isResolved = false
+    private let stateLock = NSLock()
+    
+    init(
+        id: String,
+        plugin: FileUploaderPlugin,
+        call: CAPPluginCall,
+        fileUrl: URL,
+        mimeType: String?,
+        completion: @escaping (String) -> Void
+    ) {
+        self.sessionId = id
+        self.plugin = plugin
+        self.call = call
+        self.fileUrl = fileUrl
+        self.mimeType = mimeType
+        self.completion = completion
+        super.init()
+    }
+    
+    func start() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            
+            guard let viewController = self.plugin?.getTopViewController() else {
+                self.fail(with: "Unable to get active view controller")
+                self.finish()
+                return
+            }
+            
+            let controller = UIDocumentInteractionController(url: self.fileUrl)
+            controller.delegate = self
+            
+            if let uti = self.plugin?.getUTI(mimeType: self.mimeType, fileUrl: self.fileUrl) {
+                controller.uti = uti
+            }
+            
+            self.documentInteractionController = controller
+            
+            let previewPresented = controller.presentPreview(animated: true)
+            if previewPresented {
+                self.resolve([
+                    "status": true,
+                    "error": false,
+                    "path": self.fileUrl.path
+                ])
+                return
+            }
+            
+            // If direct preview is not supported, present options menu
+            let popoverRect = CGRect(
+                x: viewController.view.bounds.midX,
+                y: viewController.view.bounds.midY,
+                width: 0,
+                height: 0
+            )
+            
+            let menuOpened = controller.presentOptionsMenu(
+                from: popoverRect,
+                in: viewController.view,
+                animated: true
+            )
+            
+            if !menuOpened {
+                let openInOpened = controller.presentOpenInMenu(
+                    from: popoverRect,
+                    in: viewController.view,
+                    animated: true
+                )
+                
+                if !openInOpened {
+                    self.fail(with: "No app found to open this file")
+                    self.finish()
+                    return
+                }
+            }
+            
+            self.resolve([
+                "status": true,
+                "error": false,
+                "path": self.fileUrl.path
+            ])
+        }
+    }
+    
+    // MARK: - UIDocumentInteractionControllerDelegate
+    
+    public func documentInteractionControllerViewControllerForPreview(_ controller: UIDocumentInteractionController) -> UIViewController {
+        return plugin?.getTopViewController() ?? UIViewController()
+    }
+    
+    public func documentInteractionControllerDidEndPreview(_ controller: UIDocumentInteractionController) {
+        finish()
+    }
+    
+    public func documentInteractionControllerDidDismissOptionsMenu(_ controller: UIDocumentInteractionController) {
+        finish()
+    }
+    
+    public func documentInteractionControllerDidDismissOpenInMenu(_ controller: UIDocumentInteractionController) {
+        finish()
+    }
+    
+    // MARK: - Helpers
+    
+    private func resolve(_ data: [String: Any]) {
+        stateLock.lock()
+        guard !isResolved else {
+            stateLock.unlock()
+            return
+        }
+        isResolved = true
+        stateLock.unlock()
+        
+        plugin?.resolveSuccess(call, data)
+    }
+    
+    private func fail(with message: String) {
+        stateLock.lock()
+        guard !isResolved else {
+            stateLock.unlock()
+            return
+        }
+        isResolved = true
+        stateLock.unlock()
+        
+        plugin?.resolveSuccess(call, [
+            "status": false,
+            "error": true,
+            "message": message,
+            "path": fileUrl.path
+        ])
+    }
+    
+    private func finish() {
+        documentInteractionController = nil
+        completion(sessionId)
     }
 }

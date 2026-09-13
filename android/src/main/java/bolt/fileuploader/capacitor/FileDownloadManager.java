@@ -12,6 +12,8 @@ import com.androidnetworking.interfaces.DownloadProgressListener;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PluginCall;
 
+import java.io.File;
+
 public class FileDownloadManager {
 
     public interface EventNotifier {
@@ -44,8 +46,17 @@ public class FileDownloadManager {
 
         AndroidNetworking.initialize(context.getApplicationContext());
 
-        String downloadDir =
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).toString();
+        File targetDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        if (targetDir == null || (!targetDir.exists() && !targetDir.mkdirs()) || !targetDir.canWrite()) {
+            File externalDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+            if (externalDir != null) {
+                targetDir = externalDir;
+            } else {
+                targetDir = context.getFilesDir();
+            }
+        }
+
+        String downloadDir = targetDir.getAbsolutePath();
         String downloadPath = downloadDir + "/" + fileNameValue;
 
         AndroidNetworking.download(pathValue, downloadDir, fileNameValue)
@@ -89,7 +100,7 @@ public class FileDownloadManager {
 
                     @Override
                     public void onError(ANError error) {
-                        Log.d("FileUpload", "download error: " + error.getErrorDetail());
+                        Log.d("FileUpload", "download error: " + (error != null ? error.getErrorDetail() : "unknown"));
 
                         JSObject finish = new JSObject();
                         finish.put("path", "file://" + downloadPath);
@@ -104,7 +115,7 @@ public class FileDownloadManager {
                         result.put("path", "file://" + downloadPath);
                         result.put("error", true);
                         result.put("status", false);
-                        result.put("message", error.getErrorDetail());
+                        result.put("message", error != null ? error.getErrorDetail() : "Download error");
                         call.resolve(result);
                     }
                 }

@@ -1,9 +1,12 @@
 package bolt.fileuploader.capacitor;
 
+import android.content.Context;
+
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PluginCall;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -29,7 +32,7 @@ public class FileUploadManager {
         this.client = client != null ? client : new OkHttpClient();
     }
 
-    public void startUploadFile(PluginCall call) {
+    public void startUploadFile(Context context, PluginCall call) {
         String url = call.getString("url");
         String token = call.getString("token", "");
         JSObject data = call.getObject("data", null);
@@ -41,7 +44,7 @@ public class FileUploadManager {
             return;
         }
         final String urlValue = url.trim();
-        final String tokenValue = token != null ? token : "";
+        final String tokenValue = token != null ? token.trim() : "";
 
         if (FileUtils.isBlank(filePath)) {
             call.reject("file is required");
@@ -52,7 +55,18 @@ public class FileUploadManager {
 
         MultipartBody.Builder requestBody = new MultipartBody.Builder().setType(MultipartBody.FORM);
         try {
-            File file = FileUtils.getFileFromUriString(filePathValue);
+            String resolvedPath = FileUtils.resolveNativePath(context, filePathValue);
+            if (FileUtils.isBlank(resolvedPath)) {
+                call.reject("Unable to resolve file path: " + filePathValue);
+                return;
+            }
+
+            File file = new File(resolvedPath);
+            if (!file.exists()) {
+                call.reject("File does not exist: " + resolvedPath);
+                return;
+            }
+
             String fileNameUpload = file.getName().trim();
             String mimeType = FileUtils.getMimeTypeFromFileName(fileNameUpload);
             if (mimeType == null) {
@@ -67,28 +81,20 @@ public class FileUploadManager {
             requestBody.addFormDataPart(uploadKey, fileNameUpload, body);
 
             if (data != null) {
-                Iterator<String> keys = data.keys();
-                while (keys.hasNext()) {
-                    String key = keys.next();
-                    try {
-                        Object value = data.get(key);
-                        requestBody.addFormDataPart(key, String.valueOf(value));
-                    } catch (JSONException ignored) {
-                    }
-                }
+                appendFormData(requestBody, data);
             }
         } catch (Exception e) {
-            call.reject("Failed to prepare file upload", e);
+            call.reject("Failed to prepare file upload: " + e.getMessage(), e);
             return;
         }
 
         executeUpload(call, urlValue, tokenValue, requestBody.build());
     }
 
-    public void startUploadFiles(PluginCall call) {
+    public void startUploadFiles(Context context, PluginCall call) {
         String url = call.getString("url");
         String token = call.getString("token", "");
-        JSObject data = call.getObject("data", new JSObject());
+        JSObject data = call.getObject("data", null);
         String fileKey = call.getString("fileKey", "files[]");
         JSArray files = call.getArray("files");
 
@@ -97,7 +103,7 @@ public class FileUploadManager {
             return;
         }
         final String urlValue = url.trim();
-        final String tokenValue = token != null ? token : "";
+        final String tokenValue = token != null ? token.trim() : "";
         final String uploadKey = FileUtils.isBlank(fileKey) ? "files[]" : fileKey.trim();
 
         if (files == null || files.length() == 0) {
@@ -111,12 +117,20 @@ public class FileUploadManager {
                 JSONObject row = files.getJSONObject(i);
                 String filePathValue = row.optString("path", "").trim();
                 if (filePathValue.isEmpty()) {
-                    continue;
+                    call.reject("Invalid or missing 'path' for file at index " + i);
+                    return;
                 }
 
-                File file = FileUtils.getFileFromUriString(filePathValue);
+                String resolvedPath = FileUtils.resolveNativePath(context, filePathValue);
+                if (FileUtils.isBlank(resolvedPath)) {
+                    call.reject("Unable to resolve file path at index " + i + ": " + filePathValue);
+                    return;
+                }
+
+                File file = new File(resolvedPath);
                 if (!file.exists()) {
-                    continue;
+                    call.reject("File does not exist at index " + i + ": " + resolvedPath);
+                    return;
                 }
 
                 String fileNameUpload = file.getName().trim();
@@ -134,30 +148,42 @@ public class FileUploadManager {
             }
 
             if (data != null) {
-                Iterator<String> keys = data.keys();
-                while (keys.hasNext()) {
-                    String key = keys.next();
-                    try {
-                        Object value = data.get(key);
-                        requestBody.addFormDataPart(key, String.valueOf(value));
-                    } catch (JSONException ignored) {
-                    }
-                }
+                appendFormData(requestBody, data);
             }
         } catch (Exception e) {
-            call.reject("Failed to build upload request", e);
+            call.reject("Failed to build upload request: " + e.getMessage(), e);
             return;
         }
 
         executeUpload(call, urlValue, tokenValue, requestBody.build());
     }
 
+    private void appendFormData(MultipartBody.Builder requestBody, JSObject data) {
+        Iterator<String> keys = data.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            try {
+                Object value = data.get(key);
+                if (value instanceof JSONObject || value instanceof JSONArray) {
+                    requestBody.addFormDataPart(key, value.toString());
+                } else if (value != null) {
+                    requestBody.addFormDataPart(key, String.valueOf(value));
+                }
+            } catch (JSONException ignored) {
+            }
+        }
+    }
+
     private void executeUpload(PluginCall call, String url, String token, MultipartBody postBody) {
-        Request request = new Request.Builder()
+        Request.Builder requestBuilder = new Request.Builder()
             .url(url)
-            .header("Authorization", "Bearer " + token)
-            .post(postBody)
-            .build();
+            .post(postBody);
+
+        if (!token.isEmpty()) {
+            requestBuilder.header("Authorization", "Bearer " + token);
+        }
+
+        Request request = requestBuilder.build();
 
         JSObject obj = new JSObject();
         try (Response response = client.newCall(request).execute()) {
