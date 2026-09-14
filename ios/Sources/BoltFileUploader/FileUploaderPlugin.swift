@@ -382,7 +382,7 @@ public class FileUploaderPlugin: CAPPlugin {
     // MARK: - View Hierarchy Helper
     
     public func getTopViewController() -> UIViewController? {
-        var topController: UIViewController? = self.bridge?.viewController ?? self.viewController
+        var topController: UIViewController? = self.bridge?.viewController
         
         if topController == nil {
             if #available(iOS 13.0, *) {
@@ -668,7 +668,7 @@ class FileDownloader: NSObject, URLSessionDownloadDelegate {
             
             if fileManager.fileExists(atPath: destinationUrl.path) {
                 // Atomic replace
-                _ = try fileManager.replaceItemAt(destinationUrl, withItemAt: location, backupItemName: nil, options: [], resultingItemURL: nil)
+                _ = try fileManager.replaceItemAt(destinationUrl, withItemAt: location, backupItemName: nil, options: [])
             } else {
                 try fileManager.moveItem(at: location, to: destinationUrl)
             }
