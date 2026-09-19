@@ -16,6 +16,23 @@ import java.io.File;
 
 public class FileDownloadManager {
 
+    /**
+     * JavaScript's Number type is IEEE-754 double-precision, which can represent
+     * integers exactly only up to 2^53 (Number.MAX_SAFE_INTEGER = 9,007,199,254,740,991).
+     * Files larger than ~8 PiB would produce precision loss; we clamp and log if that occurs.
+     */
+    private static final long JS_MAX_SAFE_INTEGER = 9_007_199_254_740_991L;
+
+    private static long safeProgressValue(long value, String label) {
+        if (value > JS_MAX_SAFE_INTEGER) {
+            Log.w("FileUpload", "safeProgressValue: '" + label + "'=" + value
+                + " exceeds JS Number.MAX_SAFE_INTEGER (" + JS_MAX_SAFE_INTEGER
+                + "). Clamping to avoid precision loss in the JavaScript layer.");
+            return JS_MAX_SAFE_INTEGER;
+        }
+        return value;
+    }
+
     public interface EventNotifier {
         void notify(String eventName, JSObject data);
     }
@@ -66,13 +83,18 @@ public class FileDownloadManager {
             .build()
             .setDownloadProgressListener(
                 (DownloadProgressListener) (bytesDownloaded, totalBytes) -> {
+                    // FIX: Clamp long values to JS Number.MAX_SAFE_INTEGER to prevent
+                    // silent precision loss when the Capacitor bridge serializes to JS.
+                    long safeDownloaded = safeProgressValue(bytesDownloaded, "bytesDownloaded");
+                    long safeTotal = safeProgressValue(totalBytes, "totalBytes");
+
                     JSObject progress = new JSObject();
                     progress.put("path", "file://" + downloadPath);
                     progress.put("start", false);
                     progress.put("finish", false);
                     progress.put("error", false);
-                    progress.put("bytesDownloaded", bytesDownloaded);
-                    progress.put("totalBytes", totalBytes);
+                    progress.put("bytesDownloaded", safeDownloaded);
+                    progress.put("totalBytes", safeTotal);
                     if (notifier != null) {
                         notifier.notify("downloadStatus", progress);
                     }

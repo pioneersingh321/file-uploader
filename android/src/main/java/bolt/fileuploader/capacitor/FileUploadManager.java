@@ -1,6 +1,7 @@
 package bolt.fileuploader.capacitor;
 
 import android.content.Context;
+import android.util.Log;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -169,7 +170,10 @@ public class FileUploadManager {
                 } else if (value != null) {
                     requestBody.addFormDataPart(key, String.valueOf(value));
                 }
-            } catch (JSONException ignored) {
+            } catch (JSONException e) {
+                // Log and continue — silently dropping fields makes type bugs impossible
+                // to diagnose. A warning here surfaces the issue without crashing.
+                Log.w("FileUpload", "appendFormData: skipping key '" + key + "' due to JSONException: " + e.getMessage());
             }
         }
     }
@@ -187,21 +191,57 @@ public class FileUploadManager {
 
         JSObject obj = new JSObject();
         try (Response response = client.newCall(request).execute()) {
-            String responseBody = response.body() != null ? response.body().string() : "{}";
+            String responseBodyStr = response.body() != null ? response.body().string() : "";
+            boolean isSuccessful = response.isSuccessful();
+            int httpCode = response.code();
+
+            Log.d("FileUpload", "executeUpload: httpStatus=" + httpCode + ", success=" + isSuccessful);
+
+            // Normalize output shape: always produce a JSONObject so the JS consumer
+            // receives a consistent object type on both iOS and Android.
+            // - Valid JSON object  → used directly.
+            // - Valid JSON array   → wrapped as {"items":[...]} (matches iOS wrapping).
+            // - Non-JSON / empty   → wrapped as {"raw":"<string>"}.
             JSONObject resultObject;
-            try {
-                resultObject = new JSONObject(responseBody);
-            } catch (JSONException ignored) {
+            if (responseBodyStr.isEmpty()) {
                 resultObject = new JSONObject();
-                resultObject.put("raw", responseBody);
+            } else {
+                try {
+                    Object parsed = new org.json.JSONTokener(responseBodyStr).nextValue();
+                    if (parsed instanceof JSONObject) {
+                        resultObject = (JSONObject) parsed;
+                    } else if (parsed instanceof JSONArray) {
+                        // Top-level array — wrap to maintain consistent object output.
+                        Log.i("FileUpload", "executeUpload: top-level JSON array response, wrapping as {items:[...]}");
+                        resultObject = new JSONObject();
+                        resultObject.put("items", parsed);
+                    } else {
+                        // Scalar JSON value — wrap as {value: ...}
+                        resultObject = new JSONObject();
+                        resultObject.put("value", parsed);
+                    }
+                } catch (JSONException e) {
+                    // Not valid JSON — wrap as raw string.
+                    Log.i("FileUpload", "executeUpload: non-JSON response body, returning as raw string");
+                    resultObject = new JSONObject();
+                    resultObject.put("raw", responseBodyStr);
+                }
             }
 
             obj.put("output", resultObject);
-            obj.put("status", response.isSuccessful());
-            obj.put("httpStatus", response.code());
+            obj.put("status", isSuccessful);
+            obj.put("httpStatus", httpCode);
             call.resolve(obj);
         } catch (Exception e) {
-            obj.put("output", e.getMessage());
+            Log.e("FileUpload", "executeUpload: network error: " + e.getMessage(), e);
+            try {
+                // Normalize error output to object shape, matching success path.
+                JSONObject errorOutput = new JSONObject();
+                errorOutput.put("raw", e.getMessage() != null ? e.getMessage() : "Unknown error");
+                obj.put("output", errorOutput);
+            } catch (JSONException ignored) {
+                obj.put("output", e.getMessage());
+            }
             obj.put("status", false);
             call.resolve(obj);
         }
