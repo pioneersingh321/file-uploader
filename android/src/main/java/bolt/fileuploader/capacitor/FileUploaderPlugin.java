@@ -101,14 +101,6 @@ public class FileUploaderPlugin extends Plugin {
 
     /**
      * Presents the system file picker for multiple files.
-     *
-     * <p>Accepted call options:</p>
-     * <ul>
-     *   <li>{@code mimeType} (string, optional) — MIME type filter, e.g. {@code "image/*"}.
-     *       Defaults to {@code "*/*"} (all files).</li>
-     *   <li>{@code multiple} (boolean, optional) — when {@code true} enables multi-select.
-     *       Defaults to {@code true}.</li>
-     * </ul>
      */
     @PluginMethod
     public void pickFiles(PluginCall call) {
