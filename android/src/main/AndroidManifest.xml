@@ -1,10 +1,52 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Always required: network access for upload/download -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+
+    <!--
+        READ_EXTERNAL_STORAGE — runtime permission required on Android 6.0–12L (API 23–32).
+        On API 33+ this permission is silently ignored; READ_MEDIA_* is used instead.
+        maxSdkVersion="32" prevents the system from listing it on API 33+ devices.
+    -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <!--
+        WRITE_EXTERNAL_STORAGE — required on Android 6.0–9 (API 23–28) for writing to
+        shared external storage. From API 29 onward, scoped storage removes the need for
+        this permission for app-specific directories, and it is fully ignored on API 30+.
+        maxSdkVersion="28" prevents unnecessary permission declarations on modern devices.
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28"
+        tools:ignore="ScopedStorage" />
+
+    <!--
+        READ_MEDIA_* — replaces READ_EXTERNAL_STORAGE on Android 13+ (API 33+).
+        Each permission grants access to a specific media type in shared storage.
+        tools:targetApi prevents Lint from flagging these on lower minSdk builds.
+    -->
+    <uses-permission
+        android:name="android.permission.READ_MEDIA_IMAGES"
+        tools:targetApi="33" />
+    <uses-permission
+        android:name="android.permission.READ_MEDIA_VIDEO"
+        tools:targetApi="33" />
+    <uses-permission
+        android:name="android.permission.READ_MEDIA_AUDIO"
+        tools:targetApi="33" />
 
     <application>
+        <!--
+            FileProvider for secure, backward-compatible URI sharing.
+            android:authorities uses ${applicationId} so the consuming app's package name
+            is substituted at build time — required for FileProvider to work correctly
+            inside a library module.
+        -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -15,6 +57,5 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
-    
     </application>
 </manifest>

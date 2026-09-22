@@ -1,4 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <external-path name="external_files" path="." />
+    <!--
+        external-path: root of shared external storage (e.g. /sdcard/).
+        Required for files opened from the public Downloads directory used by
+        FileDownloadManager when Environment.getExternalStoragePublicDirectory() is available.
+    -->
+    <external-path
+        name="external_files"
+        path="." />
+
+    <!--
+        external-files-path: app-specific external directory (Context.getExternalFilesDir()).
+        Used as the fallback download target when the public Downloads dir is unavailable
+        or not writable. No READ_EXTERNAL_STORAGE permission is required for this path.
+    -->
+    <external-files-path
+        name="external_app_files"
+        path="." />
+
+    <!--
+        files-path: app-specific internal files directory (Context.getFilesDir()).
+        Used as the last-resort download destination when no external storage is available.
+    -->
+    <files-path
+        name="internal_files"
+        path="." />
+
+    <!--
+        cache-path: app's internal cache directory (Context.getCacheDir()).
+        FileUtils.copyContentUriToCache() writes resolved content:// URIs here so that
+        FileProvider can serve them back to other apps without requiring external storage
+        permissions. Without this entry, FileProvider throws IllegalArgumentException at
+        runtime when trying to share a cached file.
+    -->
+    <cache-path
+        name="cache_files"
+        path="." />
 </paths>

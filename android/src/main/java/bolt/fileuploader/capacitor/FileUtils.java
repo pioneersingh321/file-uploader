@@ -3,6 +3,7 @@ package bolt.fileuploader.capacitor;
 import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.webkit.MimeTypeMap;
@@ -32,6 +33,18 @@ public class FileUtils {
         return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension);
     }
 
+    /**
+     * Attempts to resolve a {@code content://} URI to a real filesystem path via the
+     * deprecated {@link MediaStore.MediaColumns#DATA} column.
+     *
+     * <p><b>Compatibility note:</b> The {@code DATA} column is reliable only on
+     * Android 9 (API 28) and below. From API 29 onward, scoped storage means files in
+     * shared storage may not have an accessible physical path even when the column is
+     * populated. This method should therefore only be called on API &le; 28; prefer
+     * {@link #copyContentUriToCache(Context, Uri)} on newer devices.
+     *
+     * @return absolute path string, or {@code null} if not resolvable.
+     */
     public static String resolveContentUriToPath(Context context, Uri uri) {
         String[] projection = new String[]{MediaStore.MediaColumns.DATA};
         Cursor cursor = null;
@@ -51,6 +64,16 @@ public class FileUtils {
         }
     }
 
+    /**
+     * Copies the content addressed by a {@code content://} URI into the app's internal
+     * cache directory and returns the resulting {@link File}.
+     *
+     * <p>This is the preferred resolution strategy on Android 10+ (API 29+) where scoped
+     * storage makes direct filesystem paths unreliable. The copied file is served through
+     * {@link androidx.core.content.FileProvider} when sharing with other apps.
+     *
+     * @return the cached {@link File}, or {@code null} if the copy failed.
+     */
     public static File copyContentUriToCache(Context context, Uri uri) {
         InputStream inputStream = null;
         try {
@@ -97,6 +120,25 @@ public class FileUtils {
         }
     }
 
+    /**
+     * Resolves a path string (which may be a {@code file://} URI, a {@code content://}
+     * URI, or a raw filesystem path) to an absolute filesystem path that can be opened
+     * with {@link java.io.File}.
+     *
+     * <h3>Resolution strategy for {@code content://} URIs</h3>
+     * <ul>
+     *   <li><b>API &le; 28</b>: First tries the {@link MediaStore.MediaColumns#DATA}
+     *       column for a direct path. Falls back to
+     *       {@link #copyContentUriToCache(Context, Uri)} if the column is absent or
+     *       returns null.</li>
+     *   <li><b>API 29+</b>: Scoped storage makes the {@code DATA} column unreliable —
+     *       goes straight to {@link #copyContentUriToCache(Context, Uri)} to avoid
+     *       reading a path that may not be accessible.</li>
+     * </ul>
+     *
+     * @param path a {@code file://} URI, {@code content://} URI, or raw path string.
+     * @return resolved absolute path, or {@code null} if resolution fails.
+     */
     public static String resolveNativePath(Context context, String path) throws Exception {
         if (isBlank(path)) {
             return null;
@@ -105,17 +147,31 @@ public class FileUtils {
         Uri uri = Uri.parse(path);
         String scheme = uri.getScheme();
         String resolvedPath;
+
         if (scheme != null && "file".equals(scheme.toLowerCase(Locale.ROOT))) {
+            // file:// URI — decode directly to a filesystem path.
             resolvedPath = uri.getPath() != null ? uri.getPath() : path;
         } else if (scheme != null && "content".equals(scheme.toLowerCase(Locale.ROOT))) {
-            String direct = resolveContentUriToPath(context, uri);
-            if (direct != null) {
-                resolvedPath = direct;
+            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+                // API ≤ 28: attempt direct path via MediaStore.DATA first.
+                // This avoids unnecessary cache copies on older devices where the column
+                // is reliably populated and the path is directly accessible.
+                String direct = resolveContentUriToPath(context, uri);
+                if (direct != null) {
+                    resolvedPath = direct;
+                } else {
+                    File copied = copyContentUriToCache(context, uri);
+                    resolvedPath = copied != null ? copied.getAbsolutePath() : null;
+                }
             } else {
+                // API 29+: scoped storage — skip the DATA column and copy to cache
+                // immediately. The DATA column may return a path that belongs to another
+                // app's sandbox and is inaccessible even with READ_EXTERNAL_STORAGE.
                 File copied = copyContentUriToCache(context, uri);
                 resolvedPath = copied != null ? copied.getAbsolutePath() : null;
             }
         } else {
+            // Raw filesystem path (no scheme).
             resolvedPath = path;
         }
 
