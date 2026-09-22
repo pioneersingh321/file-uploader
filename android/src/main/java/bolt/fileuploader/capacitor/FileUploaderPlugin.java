@@ -33,13 +33,6 @@ public class FileUploaderPlugin extends Plugin {
 
     /**
      * Presents the system file picker for a single file.
-     *
-     * <p>Accepted call options:</p>
-     * <ul>
-     *   <li>{@code mimeType} (string, optional) — MIME type filter passed to the picker,
-     *       e.g. {@code "image/*"}, {@code "application/pdf"}.
-     *       Defaults to {@code "*/*"} (all files).</li>
-     * </ul>
      */
     @PluginMethod
     public void pickFile(PluginCall call) {
