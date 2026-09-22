@@ -1,163 +1,49 @@
 package bolt.fileuploader.capacitor;
 
-import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
-import android.os.Build;
 
 import androidx.activity.result.ActivityResult;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
-import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
-import com.getcapacitor.annotation.Permission;
-import com.getcapacitor.annotation.PermissionCallback;
 
 /**
  * FileUploaderPlugin — Capacitor plugin entry point.
  *
- * <h2>Permission strategy</h2>
- * Android has had three distinct storage permission models across its history:
- *
- * <ul>
- *   <li><b>API &lt; 23 (pre-Marshmallow)</b>: all permissions are granted at install time;
- *       no runtime prompts are needed.</li>
- *   <li><b>API 23–28 (Marshmallow–Pie)</b>: {@code READ_EXTERNAL_STORAGE} and
- *       {@code WRITE_EXTERNAL_STORAGE} must be requested at runtime. Both are needed
- *       to read from and write to shared external storage.</li>
- *   <li><b>API 29–32 (Q–12L)</b>: Scoped storage is introduced. {@code WRITE_EXTERNAL_STORAGE}
- *       is no longer granted even if requested (it is silently ignored from API 30 onward).
- *       {@code READ_EXTERNAL_STORAGE} is still required to read files the app did not create.</li>
- *   <li><b>API 33+ (Tiramisu)</b>: {@code READ_EXTERNAL_STORAGE} is retired. Apps must request
- *       the granular {@code READ_MEDIA_IMAGES}, {@code READ_MEDIA_VIDEO}, and
- *       {@code READ_MEDIA_AUDIO} permissions to access media in shared storage.</li>
- * </ul>
- *
- * Two {@link Permission} aliases are declared so that Capacitor's permission machinery
- * can request the correct set for each API level:
- * <ul>
- *   <li>{@code "storage"} — legacy storage permissions (API 23–32).</li>
- *   <li>{@code "mediaStorage"} — granular media permissions (API 33+).</li>
- * </ul>
- *
- * <h2>File picker (pickFile / pickFiles)</h2>
- * Permissions are requested <em>before</em> opening the system file picker so that the
- * user is prompted at the natural "I want to select a file" moment, not at upload time.
- * The flow is:
- * <ol>
- *   <li>JS calls {@code pickFile} / {@code pickFiles}.</li>
- *   <li>Plugin checks / requests the appropriate storage permission.</li>
- *   <li>On grant: launches {@link Intent#ACTION_GET_CONTENT} (system file picker).</li>
- *   <li>{@link #onPickFileResult} / {@link #onPickFilesResult} receive the selection and
- *       resolve the call with the selected file path(s).</li>
- * </ol>
+ * <p>File selection uses the system picker ({@link Intent#ACTION_GET_CONTENT}),
+ * which grants the application temporary read URI permissions directly from Android.
+ * Selected files are resolved to the app's cache directory via ContentResolver streams.
+ * No shared storage permissions ({@code READ_EXTERNAL_STORAGE}, {@code WRITE_EXTERNAL_STORAGE},
+ * or {@code READ_MEDIA_*}) are required.</p>
  */
-@CapacitorPlugin(
-    name = "FileUpload",
-    permissions = {
-        @Permission(
-            alias = "storage",
-            strings = {
-                Manifest.permission.READ_EXTERNAL_STORAGE,
-                Manifest.permission.WRITE_EXTERNAL_STORAGE
-            }
-        ),
-        @Permission(
-            alias = "mediaStorage",
-            strings = {
-                // These constants are defined from API 33. The string literals are used
-                // directly so the library compiles against older compileSdk values too.
-                // At runtime the @CapacitorPlugin processor handles version gating.
-                "android.permission.READ_MEDIA_IMAGES",
-                "android.permission.READ_MEDIA_VIDEO",
-                "android.permission.READ_MEDIA_AUDIO"
-            }
-        )
-    }
-)
+@CapacitorPlugin(name = "FileUpload")
 public class FileUploaderPlugin extends Plugin {
-
-    private static final int REQUEST_PICK_FILE  = 10001;
-    private static final int REQUEST_PICK_FILES = 10002;
 
     private final FileUploadManager uploadManager = new FileUploadManager();
 
-    /**
-     * Returns true when the runtime has the storage permissions appropriate for the
-     * running Android version, or when no runtime permission is required (API &lt; 23).
-     *
-     * <ul>
-     *   <li>API &lt; 23: install-time permissions — always considered granted.</li>
-     *   <li>API 23–32: check the {@code "storage"} alias
-     *       ({@code READ_EXTERNAL_STORAGE} + {@code WRITE_EXTERNAL_STORAGE}).</li>
-     *   <li>API 33+: check the {@code "mediaStorage"} alias
-     *       ({@code READ_MEDIA_IMAGES}, {@code READ_MEDIA_VIDEO}, {@code READ_MEDIA_AUDIO}).</li>
-     * </ul>
-     */
-    private boolean isStoragePermissionGranted() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            // Pre-Marshmallow: all permissions are granted at install time.
-            return true;
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // API 33+: need at least one of the granular media permissions.
-            // We treat any GRANTED media permission as sufficient so that apps
-            // which only handle (e.g.) images do not have to grant all three.
-            return getPermissionState("mediaStorage") == PermissionState.GRANTED;
-        }
-        // API 23–32: classic READ + WRITE storage alias.
-        return getPermissionState("storage") == PermissionState.GRANTED;
-    }
-
-    /**
-     * Returns the permission alias that should be requested for the current API level.
-     * Used when we need to ask the user for storage access.
-     */
-    private String storagePermissionAlias() {
-        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-            ? "mediaStorage"
-            : "storage";
-    }
-
     // -------------------------------------------------------------------------
-    // pickFile — request permission → open picker → resolve with selected path
+    // pickFile — open system picker → resolve with selected file info
     // -------------------------------------------------------------------------
 
     /**
      * Presents the system file picker for a single file.
      *
-     * <p>Permissions are requested <em>here</em> — before the picker opens — so the
-     * system dialog appears in the context of the user's deliberate "pick a file" action
-     * rather than later during the upload HTTP call.</p>
-     *
      * <p>Accepted call options:</p>
      * <ul>
      *   <li>{@code mimeType} (string, optional) — MIME type filter passed to the picker,
      *       e.g. {@code "image/*"}, {@code "application/pdf"}.
-     *       Defaults to {@code "*‌/*"} (all files).</li>
+     *       Defaults to {@code "*/*"} (all files).</li>
      * </ul>
      */
     @PluginMethod
     public void pickFile(PluginCall call) {
-        if (!isStoragePermissionGranted()) {
-            requestPermissionForAlias(storagePermissionAlias(), call, "pickFilePermissionCallback");
-        } else {
-            launchPickFile(call);
-        }
-    }
-
-    @PermissionCallback
-    private void pickFilePermissionCallback(PluginCall call) {
-        if (isStoragePermissionGranted()) {
-            launchPickFile(call);
-        } else {
-            call.reject("Storage permission is required to select a file");
-        }
+        launchPickFile(call);
     }
 
     private void launchPickFile(PluginCall call) {
@@ -198,14 +84,18 @@ public class FileUploaderPlugin extends Plugin {
             String displayName = FileUtils.queryDisplayName(getContext(), uri);
             String mimeType = getContext().getContentResolver().getType(uri);
 
-            JSObject file = new JSObject();
-            file.put("path", resolvedPath);
-            file.put("uri", uri.toString());
-            if (displayName != null) file.put("name", displayName);
-            if (mimeType != null)    file.put("mimeType", mimeType);
+            JSObject fileObj = new JSObject();
+            fileObj.put("path", resolvedPath);
+            fileObj.put("uri", uri.toString());
+            if (displayName != null) {
+                fileObj.put("name", displayName);
+            }
+            if (mimeType != null) {
+                fileObj.put("mimeType", mimeType);
+            }
 
             JSObject res = new JSObject();
-            res.put("file", file);
+            res.put("file", fileObj);
             call.resolve(res);
         } catch (Exception e) {
             call.reject("Failed to process selected file", e);
@@ -213,39 +103,23 @@ public class FileUploaderPlugin extends Plugin {
     }
 
     // -------------------------------------------------------------------------
-    // pickFiles — request permission → open picker (multi-select) → resolve paths
+    // pickFiles — open system picker (multi-select) → resolve paths
     // -------------------------------------------------------------------------
 
     /**
      * Presents the system file picker for multiple files.
      *
-     * <p>Permissions are requested <em>before</em> the picker opens for the same reason
-     * as {@link #pickFile}: the user is in the "I want to select files" context.</p>
-     *
      * <p>Accepted call options:</p>
      * <ul>
      *   <li>{@code mimeType} (string, optional) — MIME type filter, e.g. {@code "image/*"}.
-     *       Defaults to {@code "*‌/*"} (all files).</li>
+     *       Defaults to {@code "*/*"} (all files).</li>
      *   <li>{@code multiple} (boolean, optional) — when {@code true} enables multi-select.
      *       Defaults to {@code true}.</li>
      * </ul>
      */
     @PluginMethod
     public void pickFiles(PluginCall call) {
-        if (!isStoragePermissionGranted()) {
-            requestPermissionForAlias(storagePermissionAlias(), call, "pickFilesPermissionCallback");
-        } else {
-            launchPickFiles(call);
-        }
-    }
-
-    @PermissionCallback
-    private void pickFilesPermissionCallback(PluginCall call) {
-        if (isStoragePermissionGranted()) {
-            launchPickFiles(call);
-        } else {
-            call.reject("Storage permission is required to select files");
-        }
+        launchPickFiles(call);
     }
 
     private void launchPickFiles(PluginCall call) {
@@ -324,20 +198,7 @@ public class FileUploaderPlugin extends Plugin {
 
     @PluginMethod
     public void uploadFiles(PluginCall call) {
-        if (!isStoragePermissionGranted()) {
-            requestPermissionForAlias(storagePermissionAlias(), call, "uploadFilesPermissionCallback");
-        } else {
-            uploadManager.startUploadFiles(getContext(), call);
-        }
-    }
-
-    @PermissionCallback
-    private void uploadFilesPermissionCallback(PluginCall call) {
-        if (isStoragePermissionGranted()) {
-            uploadManager.startUploadFiles(getContext(), call);
-        } else {
-            call.reject("Storage permission is required to upload files");
-        }
+        uploadManager.startUploadFiles(getContext(), call);
     }
 
     // -------------------------------------------------------------------------
@@ -346,20 +207,7 @@ public class FileUploaderPlugin extends Plugin {
 
     @PluginMethod
     public void uploadFile(PluginCall call) {
-        if (!isStoragePermissionGranted()) {
-            requestPermissionForAlias(storagePermissionAlias(), call, "uploadFilePermissionCallback");
-        } else {
-            uploadManager.startUploadFile(getContext(), call);
-        }
-    }
-
-    @PermissionCallback
-    private void uploadFilePermissionCallback(PluginCall call) {
-        if (isStoragePermissionGranted()) {
-            uploadManager.startUploadFile(getContext(), call);
-        } else {
-            call.reject("Storage permission is required to upload file");
-        }
+        uploadManager.startUploadFile(getContext(), call);
     }
 
     // -------------------------------------------------------------------------
@@ -368,20 +216,7 @@ public class FileUploaderPlugin extends Plugin {
 
     @PluginMethod
     public void downloadFile(PluginCall call) {
-        if (!isStoragePermissionGranted()) {
-            requestPermissionForAlias(storagePermissionAlias(), call, "downloadPermissionCallback");
-        } else {
-            startDownloadFile(call);
-        }
-    }
-
-    @PermissionCallback
-    private void downloadPermissionCallback(PluginCall call) {
-        if (isStoragePermissionGranted()) {
-            startDownloadFile(call);
-        } else {
-            call.reject("Storage permission is required to download files");
-        }
+        startDownloadFile(call);
     }
 
     private void startDownloadFile(PluginCall call) {

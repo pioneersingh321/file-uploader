@@ -2,12 +2,12 @@ import type { PluginListenerHandle, PermissionState } from '@capacitor/core';
 
 export interface PermissionStatus {
   /** Legacy storage permission state (Android 6–12L, API 23–32). */
-  storage: PermissionState;
+  storage?: PermissionState;
   /**
    * Granular media permission state (Android 13+, API 33+).
    * Reflects READ_MEDIA_IMAGES / READ_MEDIA_VIDEO / READ_MEDIA_AUDIO.
    */
-  mediaStorage: PermissionState;
+  mediaStorage?: PermissionState;
 }
 
 /** A single file returned by {@link FileUploaderPlugin.pickFile} or {@link FileUploaderPlugin.pickFiles}. */
