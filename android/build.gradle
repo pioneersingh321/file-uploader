@@ -52,6 +52,8 @@ dependencies {
     // the plugin module is never built standalone.
     implementation project(':capacitor-android')
     implementation "androidx.core:core:1.12.0"
+    def androidxActivityVersion = project.hasProperty('androidxActivityVersion') ? rootProject.ext.androidxActivityVersion : '1.8.2'
+    implementation "androidx.activity:activity:$androidxActivityVersion"
     implementation "com.squareup.okhttp3:okhttp:4.12.0"
     implementation 'com.github.amitshekhariitbhu.Fast-Android-Networking:android-networking:1.0.4'
     testImplementation "junit:junit:4.13.2"
