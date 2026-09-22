@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 
+import com.getcapacitor.ActivityResult;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
@@ -172,7 +173,7 @@ public class FileUploaderPlugin extends Plugin {
     }
 
     @ActivityCallback
-    private void onPickFileResult(PluginCall call, androidx.activity.result.ActivityResult result) {
+    private void onPickFileResult(PluginCall call, ActivityResult result) {
         if (call == null) {
             return;
         }
@@ -262,7 +263,7 @@ public class FileUploaderPlugin extends Plugin {
     }
 
     @ActivityCallback
-    private void onPickFilesResult(PluginCall call, androidx.activity.result.ActivityResult result) {
+    private void onPickFilesResult(PluginCall call, ActivityResult result) {
         if (call == null) {
             return;
         }
