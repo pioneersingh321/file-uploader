@@ -1,7 +1,59 @@
 import type { PluginListenerHandle, PermissionState } from '@capacitor/core';
 
 export interface PermissionStatus {
+  /** Legacy storage permission state (Android 6–12L, API 23–32). */
   storage: PermissionState;
+  /**
+   * Granular media permission state (Android 13+, API 33+).
+   * Reflects READ_MEDIA_IMAGES / READ_MEDIA_VIDEO / READ_MEDIA_AUDIO.
+   */
+  mediaStorage: PermissionState;
+}
+
+/** A single file returned by {@link FileUploaderPlugin.pickFile} or {@link FileUploaderPlugin.pickFiles}. */
+export interface PickedFile {
+  /**
+   * The resolved native filesystem path of the selected file.
+   * On Android 29+, this will be a path inside the app's cache directory
+   * (the file is copied there from the content URI so it can be opened directly).
+   */
+  path: string;
+  /** The original content:// or file:// URI as returned by the OS file picker. */
+  uri: string;
+  /** Display name of the file as reported by the ContentResolver / DocumentProvider. */
+  name?: string;
+  /** MIME type of the selected file, e.g. `"image/jpeg"`. */
+  mimeType?: string;
+}
+
+export interface PickFileOptions {
+  /**
+   * MIME type filter passed to the OS file picker.
+   * Use `"image/*"` to show only images, `"application/pdf"` for PDFs, etc.
+   * Defaults to `"*\/*"` (all file types).
+   */
+  mimeType?: string;
+}
+
+export interface PickFileResult {
+  file: PickedFile;
+}
+
+export interface PickFilesOptions {
+  /**
+   * MIME type filter passed to the OS file picker.
+   * Defaults to `"*\/*"` (all file types).
+   */
+  mimeType?: string;
+  /**
+   * Allow the user to select more than one file.
+   * Defaults to `true`.
+   */
+  multiple?: boolean;
+}
+
+export interface PickFilesResult {
+  files: PickedFile[];
 }
 
 export interface UploadFileItem {
@@ -107,6 +159,26 @@ export interface DownloadStatusInfo {
 export type PostOptions = UploadFilesOptions;
 
 export interface FileUploaderPlugin {
+  /**
+   * Checks storage permissions and, if granted, presents the OS file picker for a
+   * **single** file selection. The permission prompt (if needed) fires here — at the
+   * moment the user initiates file selection — rather than at upload time.
+   *
+   * @param options.mimeType MIME type filter, e.g. `"image/*"`. Defaults to `"*\/*"`.
+   * @returns The selected file with its resolved native path, URI, name, and mimeType.
+   */
+  pickFile(options?: PickFileOptions): Promise<PickFileResult>;
+
+  /**
+   * Checks storage permissions and, if granted, presents the OS file picker for
+   * **multiple** file selection. The permission prompt fires here, before the picker opens.
+   *
+   * @param options.mimeType MIME type filter. Defaults to `"*\/*"`.
+   * @param options.multiple Enable multi-select. Defaults to `true`.
+   * @returns An array of selected files, each with its resolved native path.
+   */
+  pickFiles(options?: PickFilesOptions): Promise<PickFilesResult>;
+
   uploadFiles(options: UploadFilesOptions): Promise<UploadResult>;
   uploadFile(options: UploadFileOptions): Promise<UploadResult>;
   downloadFile(options: DownloadFileOptions): Promise<DownloadResult>;

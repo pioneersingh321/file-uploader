@@ -1,13 +1,18 @@
 package bolt.fileuploader.capacitor;
 
 import android.Manifest;
+import android.app.Activity;
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
@@ -38,6 +43,18 @@ import com.getcapacitor.annotation.PermissionCallback;
  *   <li>{@code "storage"} — legacy storage permissions (API 23–32).</li>
  *   <li>{@code "mediaStorage"} — granular media permissions (API 33+).</li>
  * </ul>
+ *
+ * <h2>File picker (pickFile / pickFiles)</h2>
+ * Permissions are requested <em>before</em> opening the system file picker so that the
+ * user is prompted at the natural "I want to select a file" moment, not at upload time.
+ * The flow is:
+ * <ol>
+ *   <li>JS calls {@code pickFile} / {@code pickFiles}.</li>
+ *   <li>Plugin checks / requests the appropriate storage permission.</li>
+ *   <li>On grant: launches {@link Intent#ACTION_GET_CONTENT} (system file picker).</li>
+ *   <li>{@link #onPickFileResult} / {@link #onPickFilesResult} receive the selection and
+ *       resolve the call with the selected file path(s).</li>
+ * </ol>
  */
 @CapacitorPlugin(
     name = "FileUpload",
@@ -63,6 +80,9 @@ import com.getcapacitor.annotation.PermissionCallback;
     }
 )
 public class FileUploaderPlugin extends Plugin {
+
+    private static final int REQUEST_PICK_FILE  = 10001;
+    private static final int REQUEST_PICK_FILES = 10002;
 
     private final FileUploadManager uploadManager = new FileUploadManager();
 
@@ -101,6 +121,200 @@ public class FileUploaderPlugin extends Plugin {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
             ? "mediaStorage"
             : "storage";
+    }
+
+    // -------------------------------------------------------------------------
+    // pickFile — request permission → open picker → resolve with selected path
+    // -------------------------------------------------------------------------
+
+    /**
+     * Presents the system file picker for a single file.
+     *
+     * <p>Permissions are requested <em>here</em> — before the picker opens — so the
+     * system dialog appears in the context of the user's deliberate "pick a file" action
+     * rather than later during the upload HTTP call.</p>
+     *
+     * <p>Accepted call options:</p>
+     * <ul>
+     *   <li>{@code mimeType} (string, optional) — MIME type filter passed to the picker,
+     *       e.g. {@code "image/*"}, {@code "application/pdf"}.
+     *       Defaults to {@code "*‌/*"} (all files).</li>
+     * </ul>
+     */
+    @PluginMethod
+    public void pickFile(PluginCall call) {
+        if (!isStoragePermissionGranted()) {
+            requestPermissionForAlias(storagePermissionAlias(), call, "pickFilePermissionCallback");
+        } else {
+            launchPickFile(call);
+        }
+    }
+
+    @PermissionCallback
+    private void pickFilePermissionCallback(PluginCall call) {
+        if (isStoragePermissionGranted()) {
+            launchPickFile(call);
+        } else {
+            call.reject("Storage permission is required to select a file");
+        }
+    }
+
+    private void launchPickFile(PluginCall call) {
+        String mimeType = call.getString("mimeType", "*/*");
+        if (FileUtils.isBlank(mimeType)) {
+            mimeType = "*/*";
+        }
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.setType(mimeType);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        // Single selection — do NOT set EXTRA_ALLOW_MULTIPLE.
+        startActivityForResult(call, intent, "onPickFileResult");
+    }
+
+    @ActivityCallback
+    private void onPickFileResult(PluginCall call, androidx.activity.result.ActivityResult result) {
+        if (call == null) {
+            return;
+        }
+        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null) {
+            call.reject("File selection was cancelled");
+            return;
+        }
+
+        Uri uri = result.getData().getData();
+        if (uri == null) {
+            call.reject("No file was selected");
+            return;
+        }
+
+        try {
+            String resolvedPath = FileUtils.resolveNativePath(getContext(), uri.toString());
+            if (FileUtils.isBlank(resolvedPath)) {
+                call.reject("Unable to resolve selected file path");
+                return;
+            }
+
+            String displayName = FileUtils.queryDisplayName(getContext(), uri);
+            String mimeType = getContext().getContentResolver().getType(uri);
+
+            JSObject file = new JSObject();
+            file.put("path", resolvedPath);
+            file.put("uri", uri.toString());
+            if (displayName != null) file.put("name", displayName);
+            if (mimeType != null)    file.put("mimeType", mimeType);
+
+            JSObject res = new JSObject();
+            res.put("file", file);
+            call.resolve(res);
+        } catch (Exception e) {
+            call.reject("Failed to process selected file", e);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // pickFiles — request permission → open picker (multi-select) → resolve paths
+    // -------------------------------------------------------------------------
+
+    /**
+     * Presents the system file picker for multiple files.
+     *
+     * <p>Permissions are requested <em>before</em> the picker opens for the same reason
+     * as {@link #pickFile}: the user is in the "I want to select files" context.</p>
+     *
+     * <p>Accepted call options:</p>
+     * <ul>
+     *   <li>{@code mimeType} (string, optional) — MIME type filter, e.g. {@code "image/*"}.
+     *       Defaults to {@code "*‌/*"} (all files).</li>
+     *   <li>{@code multiple} (boolean, optional) — when {@code true} enables multi-select.
+     *       Defaults to {@code true}.</li>
+     * </ul>
+     */
+    @PluginMethod
+    public void pickFiles(PluginCall call) {
+        if (!isStoragePermissionGranted()) {
+            requestPermissionForAlias(storagePermissionAlias(), call, "pickFilesPermissionCallback");
+        } else {
+            launchPickFiles(call);
+        }
+    }
+
+    @PermissionCallback
+    private void pickFilesPermissionCallback(PluginCall call) {
+        if (isStoragePermissionGranted()) {
+            launchPickFiles(call);
+        } else {
+            call.reject("Storage permission is required to select files");
+        }
+    }
+
+    private void launchPickFiles(PluginCall call) {
+        String mimeType = call.getString("mimeType", "*/*");
+        if (FileUtils.isBlank(mimeType)) {
+            mimeType = "*/*";
+        }
+        boolean multiple = Boolean.TRUE.equals(call.getBoolean("multiple", true));
+
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.setType(mimeType);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, multiple);
+        startActivityForResult(call, intent, "onPickFilesResult");
+    }
+
+    @ActivityCallback
+    private void onPickFilesResult(PluginCall call, androidx.activity.result.ActivityResult result) {
+        if (call == null) {
+            return;
+        }
+        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null) {
+            call.reject("File selection was cancelled");
+            return;
+        }
+
+        Intent data = result.getData();
+        JSArray filesArray = new JSArray();
+
+        try {
+            // Multi-select: URIs are in the ClipData bundle.
+            if (data.getClipData() != null && data.getClipData().getItemCount() > 0) {
+                android.content.ClipData clipData = data.getClipData();
+                for (int i = 0; i < clipData.getItemCount(); i++) {
+                    Uri uri = clipData.getItemAt(i).getUri();
+                    if (uri != null) {
+                        filesArray.put(buildFileObject(uri));
+                    }
+                }
+            } else if (data.getData() != null) {
+                // Single selection even though multi was requested.
+                filesArray.put(buildFileObject(data.getData()));
+            } else {
+                call.reject("No files were selected");
+                return;
+            }
+
+            JSObject res = new JSObject();
+            res.put("files", filesArray);
+            call.resolve(res);
+        } catch (Exception e) {
+            call.reject("Failed to process selected files", e);
+        }
+    }
+
+    /**
+     * Builds a single-file JSObject from a content URI, resolving the native path and
+     * querying display name and MIME type from the ContentResolver.
+     */
+    private JSObject buildFileObject(Uri uri) throws Exception {
+        String resolvedPath = FileUtils.resolveNativePath(getContext(), uri.toString());
+        String displayName  = FileUtils.queryDisplayName(getContext(), uri);
+        String mimeType     = getContext().getContentResolver().getType(uri);
+
+        JSObject file = new JSObject();
+        file.put("path", resolvedPath != null ? resolvedPath : "");
+        file.put("uri", uri.toString());
+        if (displayName != null) file.put("name", displayName);
+        if (mimeType != null)    file.put("mimeType", mimeType);
+        return file;
     }
 
     // -------------------------------------------------------------------------

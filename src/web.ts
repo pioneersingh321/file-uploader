@@ -5,6 +5,10 @@ import type {
   FileUploaderPlugin,
   OpenFileOptions,
   OpenResult,
+  PickFileOptions,
+  PickFileResult,
+  PickFilesOptions,
+  PickFilesResult,
   ResolveNativePathOptions,
   ResolveNativePathResult,
   UploadFileOptions,
@@ -14,6 +18,14 @@ import type {
 } from './definitions';
 
 export class FileUploaderWeb extends WebPlugin implements FileUploaderPlugin {
+  async pickFile(_options?: PickFileOptions): Promise<PickFileResult> {
+    throw this.unimplemented('pickFile is not implemented on web.');
+  }
+
+  async pickFiles(_options?: PickFilesOptions): Promise<PickFilesResult> {
+    throw this.unimplemented('pickFiles is not implemented on web.');
+  }
+
   async uploadFiles(_options: UploadFilesOptions): Promise<UploadResult> {
     throw this.unimplemented('uploadFiles is not implemented on web.');
   }
